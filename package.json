@@ -1,0 +1,19 @@
+{
+  "name": "auk",
+  "module": "src/index.ts",
+  "devDependencies": {
+    "@biomejs/biome": "2.1.2",
+    "@types/bun": "latest",
+    "@types/jest": "^30.0.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.38"
+  }
+}
