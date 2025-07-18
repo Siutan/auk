@@ -1,19 +1,32 @@
 {
   "name": "auk",
-  "module": "src/index.ts",
+  "version": "0.0.1",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.js"
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "2.1.2",
     "@types/bun": "latest",
-    "@types/jest": "^30.0.0"
+    "@types/jest": "^30.0.0",
+    "terser": "^5.43.1",
+    "tsup": "^8.5.0"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "scripts": {
-    "build": "tsc"
+    "build": "tsup src/index.ts --dts --format esm,cjs --minify terser",
+    "size": "bun run scripts/check-size.ts"
   },
-  "type": "module",
   "dependencies": {
     "@sinclair/typebox": "^0.34.38"
-  }
+  },
+  "type": "module"
 }
