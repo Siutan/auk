@@ -1,3 +1,6 @@
+/** biome-ignore-all lint/suspicious/noExplicitAny: <any is needed for type inference> */
+/** biome-ignore-all lint/complexity/noBannedTypes: <{} is needed for type inference> */
+
 import { EventEmitter as NodeEventEmitter } from "node:events";
 
 // Re-export TypeBox for convenience
@@ -536,6 +539,7 @@ export class Auk<Registry extends EventRegistry = {}> {
   private _modules: { name: string; fn: ModuleFn<Registry> }[] = [];
   private _cleanupHandlers: { name: string; fn: CleanupFn }[] = [];
   private _isShuttingDown = false;
+  private _shutdownResolver?: () => void;
 
   /**
    * Create a new Auk instance.
@@ -604,19 +608,11 @@ export class Auk<Registry extends EventRegistry = {}> {
 
   /**
    * Setup process signal handlers for graceful shutdown.
+   * This is now handled in the start() method to avoid conflicts.
    */
   private setupShutdownHandlers() {
-    const gracefulShutdown = async (signal: string) => {
-      if (this._isShuttingDown) return;
-      this.context.logger.info(
-        `[Auk] Received ${signal}, starting graceful shutdown...`
-      );
-      await this.shutdown();
-      process.exit(0);
-    };
-
-    process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
-    process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+    // Signal handlers are now set up in the start() method
+    // to ensure proper coordination with the keep-alive mechanism
   }
 
   /**
@@ -652,6 +648,19 @@ export class Auk<Registry extends EventRegistry = {}> {
    */
   getHealthStatus(): HealthStatus {
     return { ...this.context.health };
+  }
+
+  /**
+   * Trigger graceful shutdown programmatically.
+   * Useful for tests or when you need to shut down without sending process signals.
+   * @returns A promise that resolves when shutdown is complete.
+   */
+  async stop(): Promise<void> {
+    await this.shutdown();
+    if (this._shutdownResolver) {
+      this._shutdownResolver();
+      this._shutdownResolver = undefined;
+    }
   }
 
   /**
@@ -712,7 +721,8 @@ export class Auk<Registry extends EventRegistry = {}> {
 
   /**
    * Start the Auk service, loading modules and plugins.
-   * @returns A promise that resolves when startup is complete.
+   * This method will block and keep the process alive until a shutdown signal is received.
+   * @returns A promise that resolves when shutdown is complete.
    */
   async start() {
     // Register modules (listeners) first
@@ -736,6 +746,37 @@ export class Auk<Registry extends EventRegistry = {}> {
     this.context.logger.info(
       `[Auk] Service '${this.context.config.serviceName}' started!`
     );
-    return this;
+
+    // Keep the process alive until shutdown is triggered
+    return new Promise<void>((resolve) => {
+      // Store the resolver for programmatic shutdown
+      this._shutdownResolver = resolve;
+
+      // Remove any existing handlers to avoid conflicts
+      process.removeAllListeners("SIGINT");
+      process.removeAllListeners("SIGTERM");
+
+      const shutdownHandler = async (signal: string) => {
+        if (this._isShuttingDown) return;
+        this.context.logger.info(
+          `[Auk] Received ${signal}, starting graceful shutdown...`
+        );
+        await this.shutdown();
+        resolve();
+      };
+
+      process.on("SIGINT", () => shutdownHandler("SIGINT"));
+      process.on("SIGTERM", () => shutdownHandler("SIGTERM"));
+
+      // Keep the process alive with a timeout that never resolves
+      const keepAliveTimeout = setTimeout(() => {
+        // This timeout will never execute, but keeps the event loop alive
+      }, 2147483647); // Max timeout value (about 24.8 days)
+
+      // Store cleanup to clear the timeout during shutdown
+      this.addCleanupHandler("keep-alive-timeout", () => {
+        clearTimeout(keepAliveTimeout);
+      });
+    });
   }
 }

@@ -66,7 +66,7 @@ describe("Auk Stress Test", () => {
     auk
       .plugins({ name: "stressPlugin", fn: stressPlugin })
       .modules({ name: "stressModule", fn: stressModule });
-    await auk.start();
+    const startPromise = auk.start();
     await done;
 
     // Output stats in table
@@ -157,5 +157,7 @@ describe("Auk Stress Test", () => {
     expect(received).toBe(eventCount);
     // Optionally, assert memory/cpu usage is within reasonable bounds
     expect(after.heapUsedMB - before.heapUsedMB).toBeLessThan(100); // <100MB
+    process.kill(process.pid, "SIGINT");
+    await startPromise;
   }, 20000);
 });

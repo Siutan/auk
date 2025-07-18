@@ -39,7 +39,10 @@ describe("Auk Basic Functionality", () => {
     auk
       .plugins({ name: "testPlugin", fn: testPlugin })
       .modules({ name: "testModule", fn: testModule });
-    await auk.start();
+    const startPromise = auk.start();
+
+    // Wait a tick to ensure plugins/modules run
+    await new Promise((r) => setTimeout(r, 10));
 
     expect(pluginCalled).toBe(true);
     expect(moduleCalled).toBe(true);
@@ -47,6 +50,9 @@ describe("Auk Basic Functionality", () => {
     expect(getAukConfig().env).toEqual(process.env.NODE_ENV || "test");
     expect(getAukConfig().serviceName).toBe("auk-service");
     expect(logger.logs.some((l) => l.includes("Service"))).toBe(true);
+
+    process.kill(process.pid, "SIGINT");
+    await startPromise;
   });
 
   it("supports wildcard event listeners", async () => {
@@ -90,7 +96,8 @@ describe("Auk Basic Functionality", () => {
         });
       },
     });
-    await auk.start();
+    const startPromise = auk.start();
+    await new Promise((r) => setTimeout(r, 10));
     for (const e of eventsToEmit) {
       await auk.eventBus.emit(e);
     }
@@ -149,5 +156,7 @@ describe("Auk Basic Functionality", () => {
     expect(received.prefix).toBe(2);
     expect(received.suffix).toBe(2);
     expect(received.complex).toBe(1);
+    process.kill(process.pid, "SIGINT");
+    await startPromise;
   });
 });

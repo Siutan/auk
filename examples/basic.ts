@@ -26,21 +26,4 @@ app.modules({
   name: "greet-module",
 });
 
-app.start().then(() => {
-  console.log("Application started");
-});
-
-// For type safety, you could enhance this example like:
-//
-// import { Auk, Type } from "../src";
-//
-// const GreetSchema = Type.Object({
-//   message: Type.String(),
-//   timestamp: Type.Number(),
-// });
-//
-// const app = new Auk()
-//   .event("greet", GreetSchema);
-//
-// Then your plugins and modules would have full type safety!
-// See examples/typed-basic.ts for a complete typed example.
+app.start();
