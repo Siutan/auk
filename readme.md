@@ -1,114 +1,95 @@
 # Auk: Event-Driven Background Job Library for BunJS
 
-_Auk_ is a lightweight, modular, event-driven background job framework for BunJS. Inspired by the resilient Arctic seabird, Auk is designed for concurrency, resilience, and developer ergonomics—making it easy to compose, scale, and maintain consumer services for queues, events, and background workflows.
+_Auk_ is a lightweight, modular, event-driven background job framework. Auk is designed for concurrency, resilience, and developer ergonomics—making it easy to compose, scale, and maintain consumer services for queues, events, and background workflows.
 
 ---
 
 ## Key Features
 
-- **Express-style chaining API** for plugin and module registration
-- **Built-in event bus** for pub/sub between plugins and modules
-- **BunJS-native**, fully ESM, minimal dependencies
-- **Horizontal scaling ready:** Stateless, safe for many instances
-- **Separation of concerns:** Plugins handle event sources, modules encapsulate logic
-- **Friendly logging and error reporting**
-- **Auto-context propagation:** All parts get shared config/logger/db
+- **Event-Driven Architecture**: Plugins emit events, modules subscribe and process
+- **Modular Design**: Easy to add new plugins and modules
+- **Shared Context**: Logger, database, and config available to all components
+- **Error Handling**: Graceful error handling with proper logging
+- **Inter-Module Communication**: Modules can communicate via the event bus
+- **BunJS Native**: Leverages Bun's performance and ESM support
+- **Type Safety**: Full TypeScript support with schema-based event typing
 
 ---
 
-## Auk Concepts
+## Quick Start
 
-- **Plugin:** Handles listening/watching for new work—queues, DB changes, cron, etc. Emits events.
-- **Module:** Handles business logic—subscribes to events and processes jobs/tasks.
-- **Event Bus:** Central emitter. Plugins fire events; modules subscribe and act.
-- **App Context:** Shared dependencies/config for all parts (logger, db, config, etc).
+1. **Install dependencies** (requires [Bun](https://bun.sh/)):
+
+```bash
+bun install
+```
+
+2. **Run the tests:**
+
+```bash
+bun test.ts
+```
+
+3. **Run the demo:**
+
+```bash
+bun demo.ts
+```
 
 ---
 
 ## Usage Example
 
-```ts
-import { Auk } from "auk";
+```typescript
+import { Auk, Type } from "auk";
 
-// Example plugin: emits an event every 5 seconds
-const timerPlugin = async (context, bus) => {
-  setInterval(() => {
-    bus.emit("timer.tick", { timestamp: Date.now() });
-  }, 5000);
-};
+// Define event schemas
+const UserCreatedSchema = Type.Object({
+  id: Type.String(),
+  name: Type.String(),
+  email: Type.String(),
+});
 
-// Example module: logs timer events
-const loggerModule = (bus, context) => {
-  bus.on("timer.tick", (data) => {
-    context.logger.info("Timer ticked at", new Date(data.timestamp));
-  });
-};
+// Create typed app
+const app = new Auk().event("user.created", UserCreatedSchema);
 
-const logger = {
-  info: (...args) => console.log("[INFO]", ...args),
-  warn: (...args) => console.warn("[WARN]", ...args),
-  error: (...args) => console.error("[ERROR]", ...args),
-  debug: (...args) => console.debug("[DEBUG]", ...args),
-};
+// Plugin with type-safe emission
+app.plugins({
+  name: "user-plugin",
+  fn: async (context, bus) => {
+    bus.emitSync({
+      event: "user.created",
+      data: {
+        id: "user123",
+        name: "Alice Johnson",
+        email: "alice@example.com",
+      },
+    });
+  },
+});
 
-const app = new Auk({ logger, db: {}, config: {} })
-  .plugins(timerPlugin)
-  .modules(loggerModule);
+// Module with type-safe listening
+app.modules({
+  name: "user-module",
+  fn: (bus, context) => {
+    bus.on("user.created", (userData) => {
+      context.logger.info(`New user: ${userData.name} (${userData.email})`);
+    });
+  },
+});
 
 app.start();
 ```
 
 ---
 
-## API Overview
+## Documentation
 
-### `Auk` Class
-
-- `constructor(context)` — Accepts a context object (logger, db, config, etc)
-- `.plugins(...pluginFns)` — Register one or more plugins
-- `.modules(...moduleFns)` — Register one or more modules
-- `.start()` — Starts all plugins and modules
-
-### Plugin Signature
-
-```ts
-type AukPlugin = (
-  context: AukContext,
-  bus: EventEmitter
-) => Promise<void> | void;
-```
-
-- Use plugins to connect to queues, cron, webhooks, etc. and emit events.
-
-### Module Signature
-
-```ts
-type AukModule = (bus: EventEmitter, context: AukContext) => void;
-```
-
-- Use modules to subscribe to events and implement business logic.
-
-### Context
-
-- The context object is shared with all plugins and modules. Add your own properties as needed (e.g., logger, db, config).
-
----
-
-## Best Practices
-
-- **Keep plugins stateless** and external-connection aware; support graceful shutdown if possible.
-- **Modules should handle errors** and avoid crashing the process.
-- **Use descriptive event names** to avoid collisions (e.g. `user.created`, `job.completed`).
-- **Leverage BunJS features:** Fast startup, built-in ESM, native async/await.
-- **Test modules/plugins independently** by passing a mock bus/context.
-
----
-
-## Extending Auk
-
-- Add more plugins for other sources (e.g. message queues, cron, webhooks).
-- Add more modules for new business workflows.
-- Compose with `.plugins()` and `.modules()` as needed.
+- [Usage Guide](./USAGE.md)
+- [API Reference](./docs/api.md)
+- [Plugins Guide](./docs/plugins.md)
+- [Modules Guide](./docs/modules.md)
+- [Typed Events](./docs/typed-events.md)
 
 ---
 
