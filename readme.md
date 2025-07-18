@@ -38,7 +38,9 @@ bun demo.ts
 
 ---
 
-## Usage Example
+## Usage 
+
+you can find more examples in the [examples](./examples) folder.
 
 ```typescript
 import { Auk, Type } from "auk";
