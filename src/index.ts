@@ -55,7 +55,7 @@ export interface AukConfig {
   /**
    * Global environment object or string (e.g. process.env, Bun.env, or custom)
    */
-  env: Record<string, string> | string;
+  env: string;
   /**
    * Service name for identification in logs, monitoring, etc.
    * Defaults to 'auk-service'.
@@ -88,10 +88,6 @@ export interface AukContext {
     error: (...args: Parameters<typeof console.info>) => void;
     debug: (...args: Parameters<typeof console.info>) => void;
   };
-  /**
-   * Database connection or client.
-   */
-  db: unknown;
   /**
    * Health status object for service monitoring.
    */
@@ -468,27 +464,35 @@ export class Auk {
    * Create a new Auk instance.
    * @param options - The Auk setup options.
    */
-  constructor({
-    config,
-    logger,
-    db,
-    ...rest
-  }: {
-    config: AukConfig;
-    logger: AukContext["logger"];
-    db: unknown;
+  constructor(options?: {
+    config?: AukConfig;
+    logger?: AukContext["logger"];
     [key: string]: unknown;
   }) {
-    const fullConfig: Required<AukConfig> = {
-      ...config,
-      serviceName: config.serviceName ?? "auk-service",
-      maxEventListeners: config.maxEventListeners ?? 0,
+    const { config, logger, ...rest } = options ?? {};
+    // Provide a default config if none is supplied
+    const defaultConfig: Required<AukConfig> = {
+      env: "development",
+      serviceName: "auk-service",
+      maxEventListeners: 0,
     };
-    const serviceLogger = prefixLogger(logger, fullConfig.serviceName);
+    const fullConfig: Required<AukConfig> = {
+      ...defaultConfig,
+      ...(config ?? {}),
+      serviceName: config?.serviceName ?? defaultConfig.serviceName,
+      maxEventListeners: config?.maxEventListeners ?? defaultConfig.maxEventListeners,
+      env: config?.env ?? defaultConfig.env,
+    };
+    const defaultLogger: AukContext["logger"] = {
+      info: (...args) => console.info(...args),
+      warn: (...args) => console.warn(...args),
+      error: (...args) => console.error(...args),
+      debug: (...args) => console.debug(...args),
+    };
+    const serviceLogger = prefixLogger(logger ?? defaultLogger, fullConfig.serviceName);
     this.context = {
       config: fullConfig,
       logger: serviceLogger,
-      db,
       health: { status: "healthy", checks: {} },
       ...rest,
     };
