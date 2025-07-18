@@ -1,5 +1,23 @@
 import { EventEmitter as NodeEventEmitter } from "node:events";
 
+// Re-export TypeBox for convenience
+export { type Static, type TSchema, Type } from "@sinclair/typebox";
+
+import type { Static, TSchema } from "@sinclair/typebox";
+
+/**
+ * Event registry to track event schemas and their types.
+ */
+type EventRegistry = Record<string, TSchema>;
+
+/**
+ * Extract event data type from registry for a given event name.
+ */
+type InferEventData<
+  Registry extends EventRegistry,
+  EventName extends string
+> = EventName extends keyof Registry ? Static<Registry[EventName]> : unknown;
+
 /**
  * Type representing the event name.
  */
@@ -104,9 +122,9 @@ export interface AukContext {
  * @param bus - The Auk event bus.
  * @returns A promise or void.
  */
-export type PluginFn = (
+export type PluginFn<Registry extends EventRegistry = {}> = (
   context: AukContext,
-  bus: AukBus
+  bus: AukBus<Registry>
 ) => Promise<void> | void;
 
 /**
@@ -114,12 +132,15 @@ export type PluginFn = (
  * @param bus - The Auk event bus.
  * @param context - The Auk context object.
  */
-export type ModuleFn = (bus: AukBus, context: AukContext) => void;
+export type ModuleFn<Registry extends EventRegistry = {}> = (
+  bus: AukBus<Registry>,
+  context: AukContext
+) => void;
 
 /**
  * Named plugin object.
  */
-export interface NamedPlugin {
+export interface NamedPlugin<Registry extends EventRegistry = {}> {
   /**
    * Name of the plugin.
    */
@@ -127,12 +148,12 @@ export interface NamedPlugin {
   /**
    * Plugin function.
    */
-  fn: PluginFn;
+  fn: PluginFn<Registry>;
 }
 /**
  * Named module object.
  */
-export interface NamedModule {
+export interface NamedModule<Registry extends EventRegistry = {}> {
   /**
    * Name of the module.
    */
@@ -140,22 +161,26 @@ export interface NamedModule {
   /**
    * Module function.
    */
-  fn: ModuleFn;
+  fn: ModuleFn<Registry>;
 }
 
 /**
  * Type for plugin registration (named or function with optional name).
  */
-export type AukPlugin = NamedPlugin | (PluginFn & { name?: string });
+export type AukPlugin<Registry extends EventRegistry = {}> =
+  | NamedPlugin<Registry>
+  | (PluginFn<Registry> & { name?: string });
 /**
  * Type for module registration (named or function with optional name).
  */
-export type AukModule = NamedModule | (ModuleFn & { name?: string });
+export type AukModule<Registry extends EventRegistry = {}> =
+  | NamedModule<Registry>
+  | (ModuleFn<Registry> & { name?: string });
 
 /**
  * AukBus wraps EventEmitter to enforce event shape and provide type safety.
  */
-export class AukBus {
+export class AukBus<Registry extends EventRegistry = {}> {
   private emitter: NodeEventEmitter;
   private middlewares: MiddlewareFn[] = [];
   private wildcardListeners: {
@@ -165,6 +190,7 @@ export class AukBus {
     regex?: RegExp;
   }[] = [];
   private hasMiddleware = false;
+  private eventSchemas: Partial<Registry> = {};
 
   /**
    * Create a new AukBus instance.
@@ -205,6 +231,24 @@ export class AukBus {
    */
   private isWildcardPattern(pattern: string): boolean {
     return pattern.includes("*");
+  }
+
+  /**
+   * Define an event schema for type safety.
+   * @param eventName - The event name
+   * @param schema - The TypeBox schema for the event data
+   * @returns A new AukBus instance with the event schema registered
+   */
+  event<EventName extends string, Schema extends TSchema>(
+    eventName: EventName,
+    schema: Schema
+  ): AukBus<Registry & Record<EventName, Schema>> {
+    const newBus = this as any as AukBus<Registry & Record<EventName, Schema>>;
+    (newBus.eventSchemas as any) = {
+      ...this.eventSchemas,
+      [eventName]: schema,
+    };
+    return newBus;
   }
 
   /**
@@ -288,6 +332,11 @@ export class AukBus {
    * @param eventObj - The event object to emit.
    * @returns True if the event had listeners, false otherwise.
    */
+  emitSync<EventName extends keyof Registry>(eventObj: {
+    event: EventName;
+    data: InferEventData<Registry, EventName & string>;
+  }): boolean;
+  emitSync(eventObj: AukEvent): boolean;
   emitSync(eventObj: AukEvent): boolean {
     return this.emitSyncInternal(eventObj);
   }
@@ -297,6 +346,11 @@ export class AukBus {
    * @param eventObj - The event object to emit.
    * @returns True if the event had listeners, false otherwise.
    */
+  async emit<EventName extends keyof Registry>(eventObj: {
+    event: EventName;
+    data: InferEventData<Registry, EventName & string>;
+  }): Promise<boolean>;
+  async emit(eventObj: AukEvent): Promise<boolean>;
   async emit(eventObj: AukEvent): Promise<boolean> {
     // Fast path: skip validation and async processing when no middleware
     if (!this.hasMiddleware) {
@@ -324,7 +378,12 @@ export class AukBus {
    * @param listener - The listener function.
    * @returns The AukBus instance.
    */
-  on(event: string, listener: (data: EventData) => void): this {
+  on<EventName extends keyof Registry>(
+    event: EventName,
+    listener: (data: InferEventData<Registry, EventName & string>) => void
+  ): this;
+  on(event: string, listener: (data: any) => void): this;
+  on(event: string, listener: (data: any) => void): this {
     if (this.isWildcardPattern(event)) {
       // Pre-compile regex for better performance
       const regex = this.compilePattern(event);
@@ -341,7 +400,12 @@ export class AukBus {
    * @param listener - The listener function.
    * @returns The AukBus instance.
    */
-  off(event: string, listener: (data: EventData) => void): this {
+  off<EventName extends keyof Registry>(
+    event: EventName,
+    listener: (data: InferEventData<Registry, EventName & string>) => void
+  ): this;
+  off(event: string, listener: (data: any) => void): this;
+  off(event: string, listener: (data: any) => void): this {
     if (this.isWildcardPattern(event)) {
       this.wildcardListeners = this.wildcardListeners.filter(
         (wl) => !(wl.pattern === event && wl.listener === listener)
@@ -358,7 +422,12 @@ export class AukBus {
    * @param listener - The listener function.
    * @returns The AukBus instance.
    */
-  once(event: string, listener: (data: EventData) => void): this {
+  once<EventName extends keyof Registry>(
+    event: EventName,
+    listener: (data: InferEventData<Registry, EventName & string>) => void
+  ): this;
+  once(event: string, listener: (data: any) => void): this;
+  once(event: string, listener: (data: any) => void): this {
     if (this.isWildcardPattern(event)) {
       // Pre-compile regex for better performance
       const regex = this.compilePattern(event);
@@ -377,12 +446,12 @@ export class AukBus {
 
 /**
  * Get the global Auk configuration singleton.
- * @throws If the config is not initialized.
+ * @throws If the config is not initialised.
  * @returns The required AukConfig object.
  */
 let _globalAukConfig: Required<AukConfig> | undefined;
 export function getAukConfig(): Required<AukConfig> {
-  if (!_globalAukConfig) throw new Error("Auk config not initialized");
+  if (!_globalAukConfig) throw new Error("Auk config not initialised");
   return _globalAukConfig;
 }
 
@@ -391,7 +460,9 @@ export function getAukConfig(): Required<AukConfig> {
  * @param plugin - The plugin object or function.
  * @returns The plugin name.
  */
-function getPluginName(plugin: AukPlugin): string {
+function getPluginName<Registry extends EventRegistry>(
+  plugin: AukPlugin<Registry>
+): string {
   if (typeof plugin === "function") return plugin.name || "anonymous-plugin";
   return plugin.name;
 }
@@ -400,7 +471,9 @@ function getPluginName(plugin: AukPlugin): string {
  * @param mod - The module object or function.
  * @returns The module name.
  */
-function getModuleName(mod: AukModule): string {
+function getModuleName<Registry extends EventRegistry>(
+  mod: AukModule<Registry>
+): string {
   if (typeof mod === "function") return mod.name || "anonymous-module";
   return mod.name;
 }
@@ -409,7 +482,9 @@ function getModuleName(mod: AukModule): string {
  * @param plugin - The plugin object or function.
  * @returns The plugin function.
  */
-function getPluginFn(plugin: AukPlugin): PluginFn {
+function getPluginFn<Registry extends EventRegistry>(
+  plugin: AukPlugin<Registry>
+): PluginFn<Registry> {
   return typeof plugin === "function" ? plugin : plugin.fn;
 }
 /**
@@ -417,7 +492,9 @@ function getPluginFn(plugin: AukPlugin): PluginFn {
  * @param mod - The module object or function.
  * @returns The module function.
  */
-function getModuleFn(mod: AukModule): ModuleFn {
+function getModuleFn<Registry extends EventRegistry>(
+  mod: AukModule<Registry>
+): ModuleFn<Registry> {
   return typeof mod === "function" ? mod : mod.fn;
 }
 
@@ -446,7 +523,7 @@ function prefixLogger(
 /**
  * Main Auk class for service setup, plugin/module registration, and startup.
  */
-export class Auk {
+export class Auk<Registry extends EventRegistry = {}> {
   /**
    * The Auk context object.
    */
@@ -454,9 +531,9 @@ export class Auk {
   /**
    * The Auk event bus instance.
    */
-  public eventBus: AukBus;
-  private _plugins: { name: string; fn: PluginFn }[] = [];
-  private _modules: { name: string; fn: ModuleFn }[] = [];
+  public eventBus: AukBus<Registry>;
+  private _plugins: { name: string; fn: PluginFn<Registry> }[] = [];
+  private _modules: { name: string; fn: ModuleFn<Registry> }[] = [];
   private _cleanupHandlers: { name: string; fn: CleanupFn }[] = [];
   private _isShuttingDown = false;
 
@@ -480,7 +557,8 @@ export class Auk {
       ...defaultConfig,
       ...(config ?? {}),
       serviceName: config?.serviceName ?? defaultConfig.serviceName,
-      maxEventListeners: config?.maxEventListeners ?? defaultConfig.maxEventListeners,
+      maxEventListeners:
+        config?.maxEventListeners ?? defaultConfig.maxEventListeners,
       env: config?.env ?? defaultConfig.env,
     };
     const defaultLogger: AukContext["logger"] = {
@@ -489,7 +567,10 @@ export class Auk {
       error: (...args) => console.error(...args),
       debug: (...args) => console.debug(...args),
     };
-    const serviceLogger = prefixLogger(logger ?? defaultLogger, fullConfig.serviceName);
+    const serviceLogger = prefixLogger(
+      logger ?? defaultLogger,
+      fullConfig.serviceName
+    );
     this.context = {
       config: fullConfig,
       logger: serviceLogger,
@@ -497,10 +578,28 @@ export class Auk {
       ...rest,
     };
     _globalAukConfig = fullConfig;
-    this.eventBus = new AukBus(undefined, fullConfig.maxEventListeners);
+    this.eventBus = new AukBus<Registry>(
+      undefined,
+      fullConfig.maxEventListeners
+    );
 
     // Setup graceful shutdown handlers
     this.setupShutdownHandlers();
+  }
+
+  /**
+   * Define an event schema for type safety.
+   * @param eventName - The event name
+   * @param schema - The TypeBox schema for the event data
+   * @returns A new Auk instance with the event schema registered
+   */
+  event<EventName extends string, Schema extends TSchema>(
+    eventName: EventName,
+    schema: Schema
+  ): Auk<Registry & Record<EventName, Schema>> {
+    const newAuk = this as any as Auk<Registry & Record<EventName, Schema>>;
+    newAuk.eventBus = this.eventBus.event(eventName, schema);
+    return newAuk;
   }
 
   /**
@@ -588,7 +687,7 @@ export class Auk {
    * @param pluginFns - The plugins to register.
    * @returns The Auk instance (for chaining).
    */
-  plugins(...pluginFns: AukPlugin[]) {
+  plugins(...pluginFns: AukPlugin<Registry>[]) {
     for (const plugin of pluginFns) {
       const name = getPluginName(plugin);
       if (!name) throw new Error("All plugins must have a name");
@@ -602,7 +701,7 @@ export class Auk {
    * @param moduleFns - The modules to register.
    * @returns The Auk instance (for chaining).
    */
-  modules(...moduleFns: AukModule[]) {
+  modules(...moduleFns: AukModule<Registry>[]) {
     for (const mod of moduleFns) {
       const name = getModuleName(mod);
       if (!name) throw new Error("All modules must have a name");
