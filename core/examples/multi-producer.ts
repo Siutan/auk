@@ -1,4 +1,4 @@
-import { NATS } from "../../addons/distributed/nats/index.js";
+import { natsMiddleware } from "../../addons/distributed/nats/index";
 import { Auk, Type } from "../src/index.js";
 
 // Event schemas for different types of work
@@ -47,7 +47,7 @@ const HealthStatusSchema = Type.Object({
 });
 
 // Create NATS broker
-const nats = new NATS({
+const nats = natsMiddleware({
   servers: "nats://localhost:4222",
 });
 
@@ -60,12 +60,15 @@ const producerId = `${producerType}-producer-${process.pid}`;
 // Create Auk instance
 const app = new Auk({
   mode: "distributed",
-  broker: nats,
   config: {
     env: "development",
     serviceName: producerId,
   },
 })
+
+app.middleware(nats);
+
+app
   .event("job.email", EmailJobSchema)
   .event("job.image", ImageJobSchema)
   .event("analytics.event", AnalyticsEventSchema)
@@ -174,42 +177,15 @@ if (producerType === "image") {
 if (producerType === "analytics") {
   app.plugins({
     name: "analytics-producer",
-    fn: async (context, bus) => {
+    fn: async (context, _bus) => {
       context.logger.info(
         "📊 Analytics producer started - streaming user events"
       );
 
-      let eventCounter = 0;
-      const actions = ["page_view", "click", "purchase", "signup", "logout"];
-
       context.setInterval(() => {
-        eventCounter++;
-        const action = actions[Math.floor(Math.random() * actions.length)];
-        const userId = `user_${Math.floor(Math.random() * 1000) + 1}`;
+        // send random error to simulate failure
+          throw new Error("Simulated failure");
 
-        bus.emit({
-          event: "analytics.event",
-          data: {
-            eventId: `evt-${producerId}-${eventCounter}`,
-            userId,
-            action,
-            timestamp: Date.now(),
-            metadata: {
-              source: "web",
-              session: `session_${Math.floor(Math.random() * 100)}`,
-              ip: `192.168.1.${Math.floor(Math.random() * 255)}`,
-            },
-          },
-        });
-
-        context.logger.info(
-          `📤 Analytics event ${eventCounter} (${action} by ${userId})`
-        );
-
-        if (eventCounter >= 100) {
-          context.logger.info("🏁 Analytics producer finished");
-          process.exit(0);
-        }
       }, 200); // Very high frequency - 5 events per second
     },
   });
@@ -227,7 +203,7 @@ if (["email", "image", "analytics"].includes(producerType)) {
       const startTime = Date.now();
 
       context.setInterval(() => {
-        const uptime = Date.now() - startTime;
+        const _uptime = Date.now() - startTime;
         const avgLatency = Math.random() * 50 + 10; // Simulated latency
         const errorRate = errors / Math.max(jobsProduced, 1);
 

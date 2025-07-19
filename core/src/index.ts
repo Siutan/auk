@@ -14,7 +14,107 @@ import type { Static, TSchema } from "@sinclair/typebox";
 export type Delivery = "queue" | "broadcast";
 
 /**
- * Basic broker interface for distributed mode.
+ * DLQ message metadata for failed message tracking.
+ */
+export interface DLQMessageMetadata {
+  /**
+   * Original event name that failed.
+   */
+  originalEvent: string;
+  /**
+   * Original message data that failed.
+   */
+  originalData: any;
+  /**
+   * Number of delivery attempts before failure.
+   */
+  attemptCount: number;
+  /**
+   * Timestamp when the message was sent to DLQ.
+   */
+  timestamp: number;
+  /**
+   * Error message that caused the failure.
+   */
+  error?: string;
+}
+
+/**
+ * Message metadata for lifecycle hooks.
+ */
+export interface MessageMetadata {
+  /**
+   * Unique message ID.
+   */
+  messageId?: string;
+  /**
+   * Delivery attempt count.
+   */
+  attemptCount: number;
+  /**
+   * Message timestamp.
+   */
+  timestamp: number;
+  /**
+   * Delivery mode.
+   */
+  delivery?: Delivery;
+  /**
+   * Additional metadata.
+   */
+  [key: string]: any;
+}
+
+/**
+ * Lifecycle hook function signatures.
+ */
+export interface LifecycleHooks {
+  /**
+   * Called when a message is received.
+   */
+  onReceived?: (
+    event: AukEvent,
+    metadata: MessageMetadata
+  ) => void | Promise<void>;
+  /**
+   * Called when message processing fails.
+   */
+  onFailed?: (
+    event: AukEvent,
+    error: Error,
+    metadata: MessageMetadata
+  ) => void | Promise<void>;
+  /**
+   * Called when a message is being retried.
+   */
+  onRetry?: (
+    event: AukEvent,
+    attemptNumber: number,
+    metadata: MessageMetadata
+  ) => void | Promise<void>;
+  /**
+   * Called when message processing succeeds.
+   */
+  onSuccess?: (
+    event: AukEvent,
+    metadata: MessageMetadata
+  ) => void | Promise<void>;
+  /**
+   * Called when a message is sent to DLQ.
+   */
+  onDLQ?: (
+    event: AukEvent,
+    metadata: DLQMessageMetadata
+  ) => void | Promise<void>;
+}
+
+/**
+ * DLQ handler function signature.
+ */
+export type DLQHandler = (metadata: DLQMessageMetadata) => void | Promise<void>;
+
+/**
+ * Extended broker interface with DLQ support.
  */
 export interface Broker {
   /**
@@ -42,6 +142,27 @@ export interface Broker {
    * @returns Promise that resolves when the broker is closed
    */
   close(): Promise<void>;
+
+  /**
+   * Check if DLQ is enabled for this broker.
+   * @returns True if DLQ is enabled, false otherwise
+   */
+  isDLQEnabled?(): boolean;
+
+  /**
+   * Subscribe to DLQ messages for an event.
+   * @param event - The event name
+   * @param handler - The handler function for DLQ messages
+   */
+  subscribeToDLQ?(event: string, handler: DLQHandler): Promise<void>;
+
+  /**
+   * Get DLQ messages for an event.
+   * @param event - The event name
+   * @param limit - Maximum number of messages to retrieve
+   * @returns Array of DLQ message metadata
+   */
+  getDLQMessages?(event: string, limit?: number): Promise<DLQMessageMetadata[]>;
 }
 
 /**
@@ -90,6 +211,20 @@ export interface AukEvent<T = unknown> {
  * Middleware function signature for event processing.
  */
 export type MiddlewareFn = (event: AukEvent) => AukEvent | Promise<AukEvent>;
+
+/**
+ * Advanced middleware function with context and next capability.
+ */
+export type AdvancedMiddlewareFn = (
+  event: AukEvent,
+  context: {
+    metadata: MessageMetadata;
+    hooks: LifecycleHooks;
+    delivery?: Delivery;
+    isDistributed: boolean;
+  },
+  next: () => Promise<AukEvent>
+) => Promise<AukEvent>;
 
 /**
  * Cleanup function signature for graceful shutdown.
@@ -253,6 +388,7 @@ export type AukModule<Registry extends EventRegistry = {}> =
 export class AukBus<Registry extends EventRegistry = {}> {
   private emitter: NodeEventEmitter;
   private middlewares: MiddlewareFn[] = [];
+  private advancedMiddlewares: AdvancedMiddlewareFn[] = [];
   private wildcardListeners: {
     pattern: string;
     listener: (data: EventData) => void;
@@ -260,9 +396,11 @@ export class AukBus<Registry extends EventRegistry = {}> {
     regex?: RegExp;
   }[] = [];
   private hasMiddleware = false;
+  private hasAdvancedMiddleware = false;
   private eventSchemas: Partial<Registry> = {};
   private mode: AukMode;
   private broker?: Broker;
+  private lifecycleHooks: LifecycleHooks = {};
 
   /**
    * Create a new AukBus instance.
@@ -344,15 +482,93 @@ export class AukBus<Registry extends EventRegistry = {}> {
   }
 
   /**
+   * Register advanced middleware with context and next capability.
+   * @param fn - The advanced middleware function to register.
+   * @returns The AukBus instance.
+   */
+  advancedMiddleware(fn: AdvancedMiddlewareFn): this {
+    this.advancedMiddlewares.push(fn);
+    this.hasAdvancedMiddleware = true;
+    return this;
+  }
+
+  /**
+   * Register lifecycle hooks for message processing events.
+   * @param hooks - The lifecycle hooks to register.
+   * @returns The AukBus instance.
+   */
+  hooks(hooks: LifecycleHooks): this {
+    this.lifecycleHooks = { ...this.lifecycleHooks, ...hooks };
+    return this;
+  }
+
+  /**
+   * Fire a specific lifecycle hook with proper error handling.
+   * @param hookName - The name of the hook to fire.
+   * @param args - Arguments to pass to the hook.
+   * @private
+   */
+  private async fireHook(
+    hookName: keyof LifecycleHooks,
+    args: any[]
+  ): Promise<void> {
+    const hook = this.lifecycleHooks[hookName];
+    if (!hook) return;
+
+    try {
+      await (hook as any)(...args);
+    } catch (error) {
+      console.error(`[AukBus] Error in lifecycle hook '${hookName}':`, error);
+    }
+  }
+
+  /**
    * Apply all registered middleware to an event.
    * @param event - The event to process.
+   * @param metadata - Message metadata for advanced middleware.
+   * @param delivery - Delivery mode for the event.
    * @returns The processed event.
    */
-  private async applyMiddleware(event: AukEvent): Promise<AukEvent> {
+  private async applyMiddleware(
+    event: AukEvent,
+    metadata?: MessageMetadata,
+    delivery?: Delivery
+  ): Promise<AukEvent> {
     let processedEvent = event;
+
+    // Apply simple middleware first
     for (const middleware of this.middlewares) {
       processedEvent = await middleware(processedEvent);
     }
+
+    // Apply advanced middleware with context
+    if (this.hasAdvancedMiddleware && metadata) {
+      const middlewareStack = [...this.advancedMiddlewares];
+      let currentIndex = 0;
+
+      const next = async (): Promise<AukEvent> => {
+        if (currentIndex >= middlewareStack.length) {
+          return processedEvent;
+        }
+
+        const middleware = middlewareStack[currentIndex++];
+        if (!middleware) {
+          return processedEvent;
+        }
+
+        const context = {
+          metadata,
+          hooks: this.lifecycleHooks,
+          delivery,
+          isDistributed: this.mode === "distributed",
+        };
+
+        return await middleware(processedEvent, context, next);
+      };
+
+      processedEvent = await next();
+    }
+
     return processedEvent;
   }
 
@@ -448,42 +664,62 @@ export class AukBus<Registry extends EventRegistry = {}> {
   }): Promise<boolean>;
   async emit(eventObj: AukEvent): Promise<boolean>;
   async emit(eventObj: AukEvent): Promise<boolean> {
-    // Fast path: skip validation and async processing when no middleware
-    if (!this.hasMiddleware) {
+    const metadata: MessageMetadata = {
+      attemptCount: 1,
+      timestamp: Date.now(),
+      messageId: `${eventObj.event}-${Date.now()}-${Math.random()}`,
+    };
+
+    // Fire onReceived hook
+    await this.fireHook("onReceived", [eventObj, metadata]);
+
+    try {
+      // Fast path: skip validation and async processing when no middleware
+      if (!this.hasMiddleware && !this.hasAdvancedMiddleware) {
+        if (this.mode === "distributed" && this.broker) {
+          // In distributed mode, only publish to broker (broker handles all delivery)
+          await this.broker.publish(eventObj.event as string, eventObj.data);
+          await this.fireHook("onSuccess", [eventObj, metadata]);
+          return true;
+        }
+
+        // In local mode, emit locally only
+        const result = this.emitSyncInternal(eventObj);
+        await this.fireHook("onSuccess", [eventObj, metadata]);
+        return result;
+      }
+
+      // Validation only when middleware is present (they might depend on structure)
+      if (
+        !eventObj ||
+        typeof eventObj.event !== "string" ||
+        typeof eventObj.data !== "object"
+      ) {
+        throw new Error(
+          "AukBus.emit: event must be { event: string, data: Record<string, any> }"
+        );
+      }
+
+      const processedEvent = await this.applyMiddleware(eventObj, metadata);
+
       if (this.mode === "distributed" && this.broker) {
         // In distributed mode, only publish to broker (broker handles all delivery)
-        await this.broker.publish(eventObj.event as string, eventObj.data);
+        await this.broker.publish(
+          processedEvent.event as string,
+          processedEvent.data
+        );
+        await this.fireHook("onSuccess", [processedEvent, metadata]);
         return true;
       }
 
       // In local mode, emit locally only
-      return this.emitSyncInternal(eventObj);
+      const result = this.emitSyncInternal(processedEvent);
+      await this.fireHook("onSuccess", [processedEvent, metadata]);
+      return result;
+    } catch (error) {
+      await this.fireHook("onFailed", [eventObj, error as Error, metadata]);
+      throw error;
     }
-
-    // Validation only when middleware is present (they might depend on structure)
-    if (
-      !eventObj ||
-      typeof eventObj.event !== "string" ||
-      typeof eventObj.data !== "object"
-    ) {
-      throw new Error(
-        "AukBus.emit: event must be { event: string, data: Record<string, any> }"
-      );
-    }
-
-    const processedEvent = await this.applyMiddleware(eventObj);
-
-    if (this.mode === "distributed" && this.broker) {
-      // In distributed mode, only publish to broker (broker handles all delivery)
-      await this.broker.publish(
-        processedEvent.event as string,
-        processedEvent.data
-      );
-      return true;
-    }
-
-    // In local mode, emit locally only
-    return this.emitSyncInternal(processedEvent);
   }
 
   /**
@@ -508,25 +744,13 @@ export class AukBus<Registry extends EventRegistry = {}> {
     listener: (data: any) => void,
     opts: { delivery?: Delivery } = {}
   ): this {
-    if (this.mode === "distributed" && this.broker) {
-      // In distributed mode, only subscribe via broker (for non-wildcard events)
-      if (!this.isWildcardPattern(event)) {
-        this.broker.subscribe(event, listener, opts);
-      } else {
-        // For wildcard patterns in distributed mode, fall back to local for now
-        // TODO: Implement wildcard support in broker
-        const regex = this.compilePattern(event);
-        this.wildcardListeners.push({ pattern: event, listener, regex });
-      }
+    // Register event listeners locally - middleware will handle distributed aspects
+    if (this.isWildcardPattern(event)) {
+      // Pre-compile regex for better performance
+      const regex = this.compilePattern(event);
+      this.wildcardListeners.push({ pattern: event, listener, regex });
     } else {
-      // In local mode, register locally only
-      if (this.isWildcardPattern(event)) {
-        // Pre-compile regex for better performance
-        const regex = this.compilePattern(event);
-        this.wildcardListeners.push({ pattern: event, listener, regex });
-      } else {
-        this.emitter.on(event, listener);
-      }
+      this.emitter.on(event, listener);
     }
 
     return this;
@@ -757,6 +981,9 @@ export class Auk<Registry extends EventRegistry = {}> {
       this._broker
     );
 
+    // Store global reference for middleware access
+    (global as any).__aukInstance = this;
+
     // Setup graceful shutdown handlers
     this.setupShutdownHandlers();
   }
@@ -774,6 +1001,103 @@ export class Auk<Registry extends EventRegistry = {}> {
     const newAuk = this as any as Auk<Registry & Record<EventName, Schema>>;
     newAuk.eventBus = this.eventBus.event(eventName, schema);
     return newAuk;
+  }
+
+  /**
+   * Register a middleware function for event processing.
+   * @param fn - The middleware function to register.
+   * @returns The Auk instance (for chaining).
+   */
+  middleware(fn: MiddlewareFn | AdvancedMiddlewareFn): this {
+    // Auto-detect if it's advanced middleware based on function signature
+    if (fn.length >= 3) {
+      this.eventBus.advancedMiddleware(fn as AdvancedMiddlewareFn);
+    } else {
+      this.eventBus.middleware(fn as MiddlewareFn);
+    }
+    return this;
+  }
+
+  /**
+   * Register lifecycle hooks for message processing events.
+   * @param hooks - The lifecycle hooks to register.
+   * @returns The Auk instance (for chaining).
+   */
+  hooks(hooks: LifecycleHooks): this {
+    this.eventBus.hooks(hooks);
+    return this;
+  }
+
+  /**
+   * Register an onReceived lifecycle hook.
+   * @param handler - The handler function.
+   * @returns The Auk instance (for chaining).
+   */
+  onReceived(
+    handler: (
+      event: AukEvent,
+      metadata: MessageMetadata
+    ) => void | Promise<void>
+  ): this {
+    return this.hooks({ onReceived: handler });
+  }
+
+  /**
+   * Register an onFailed lifecycle hook.
+   * @param handler - The handler function.
+   * @returns The Auk instance (for chaining).
+   */
+  onFailed(
+    handler: (
+      event: AukEvent,
+      error: Error,
+      metadata: MessageMetadata
+    ) => void | Promise<void>
+  ): this {
+    return this.hooks({ onFailed: handler });
+  }
+
+  /**
+   * Register an onRetry lifecycle hook.
+   * @param handler - The handler function.
+   * @returns The Auk instance (for chaining).
+   */
+  onRetry(
+    handler: (
+      event: AukEvent,
+      attemptNumber: number,
+      metadata: MessageMetadata
+    ) => void | Promise<void>
+  ): this {
+    return this.hooks({ onRetry: handler });
+  }
+
+  /**
+   * Register an onSuccess lifecycle hook.
+   * @param handler - The handler function.
+   * @returns The Auk instance (for chaining).
+   */
+  onSuccess(
+    handler: (
+      event: AukEvent,
+      metadata: MessageMetadata
+    ) => void | Promise<void>
+  ): this {
+    return this.hooks({ onSuccess: handler });
+  }
+
+  /**
+   * Register an onDLQ lifecycle hook.
+   * @param handler - The handler function.
+   * @returns The Auk instance (for chaining).
+   */
+  onDLQ(
+    handler: (
+      event: AukEvent,
+      metadata: DLQMessageMetadata
+    ) => void | Promise<void>
+  ): this {
+    return this.hooks({ onDLQ: handler });
   }
 
   /**

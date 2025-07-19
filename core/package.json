@@ -11,6 +11,10 @@
       "import": "./dist/index.js"
     }
   },
+  "scripts": {
+    "build": "tsup src/index.ts --dts --format esm,cjs --minify terser",
+    "size": "bun run scripts/check-size.ts"
+  },
   "devDependencies": {
     "@biomejs/biome": "2.1.2",
     "@types/bun": "^1.2.18",
@@ -20,10 +24,6 @@
   },
   "peerDependencies": {
     "typescript": "^5"
-  },
-  "scripts": {
-    "build": "tsup src/index.ts --dts --format esm,cjs --minify terser",
-    "size": "bun run scripts/check-size.ts"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.38"

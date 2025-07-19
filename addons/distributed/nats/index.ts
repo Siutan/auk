@@ -1,117 +1,352 @@
-/** biome-ignore-all lint/suspicious/noExplicitAny: <the data is not known by the plugin> */
+/** biome-ignore-all lint/suspicious/noExplicitAny: <the payload data types are not known by the plugin> */
 import {
+  AckPolicy,
   type ConnectionOptions,
   connect,
+  DeliverPolicy,
+  type JetStreamClient,
+  type JetStreamManager,
+  type JetStreamSubscription,
   JSONCodec,
   type NatsConnection,
+  ReplayPolicy,
+  RetentionPolicy,
+  StorageType,
+  type StreamConfig,
   type Subscription,
 } from "nats";
-import type { Broker, Delivery } from "../../../core/src/index.js";
+import type {
+  AdvancedMiddlewareFn,
+  AukEvent,
+  Delivery,
+  DLQMessageMetadata,
+  MessageMetadata,
+} from "../../../core/src/index.js";
 
 /**
- * NATS connection options extending the base NATS ConnectionOptions.
+ * DLQ configuration for JetStream.
  */
-export interface NATSOptions extends ConnectionOptions {
+export interface DLQConfig {
+  /**
+   * Enable Dead Letter Queue functionality.
+   */
+  enabled: boolean;
+  /**
+   * Maximum number of delivery attempts before sending to DLQ.
+   */
+  maxDeliver?: number;
+  /**
+   * DLQ stream name suffix. Default: ".DLQ"
+   */
+  streamSuffix?: string;
+  /**
+   * Consumer name for DLQ processing.
+   */
+  consumerName?: string;
+  /**
+   * Auto-create streams if they don't exist.
+   */
+  autoCreateStreams?: boolean;
+}
+
+/**
+ * NATS middleware options.
+ */
+export interface NATSMiddlewareOptions extends ConnectionOptions {
   /**
    * NATS server URL(s).
    */
   servers?: string | string[];
+  /**
+   * Dead Letter Queue configuration.
+   */
+  dlq?: DLQConfig;
+  /**
+   * Auto-register streams for all events.
+   */
+  autoRegisterStreams?: boolean;
 }
 
 /**
- * NATS broker implementation for Auk distributed mode.
+ * NATS middleware class that handles distributed messaging.
  */
-export class NATS implements Broker {
+class NATSMiddleware {
   private connection?: NatsConnection;
+  private js?: JetStreamClient;
+  private jsm?: JetStreamManager;
   private codec = JSONCodec();
-  private subscriptions = new Map<string, Subscription>();
-  private options: NATSOptions;
+  private subscriptions = new Map<
+    string,
+    Subscription | JetStreamSubscription
+  >();
+  private options: NATSMiddlewareOptions;
+  private dlqEnabled: boolean;
+  private dlqConfig: Required<DLQConfig>;
+  private registeredStreams = new Set<string>();
+  private eventListeners = new Map<
+    string,
+    { handler: (data: any) => void; delivery?: Delivery }
+  >();
 
-  /**
-   * Create a new NATS broker instance.
-   * @param options - NATS connection options
-   */
-  constructor(options: NATSOptions = {}) {
+  constructor(options: NATSMiddlewareOptions = {}) {
     this.options = options;
+    this.dlqEnabled = options.dlq?.enabled ?? false;
+    this.dlqConfig = {
+      enabled: this.dlqEnabled,
+      maxDeliver: options.dlq?.maxDeliver ?? 3,
+      streamSuffix: options.dlq?.streamSuffix ?? ".DLQ",
+      consumerName: options.dlq?.consumerName ?? "auk-dlq-consumer",
+      autoCreateStreams: options.dlq?.autoCreateStreams ?? true,
+    };
   }
 
   /**
    * Ensure connection is established.
-   * @private
    */
-  private async ensureConnection(): Promise<NatsConnection> {
+  async ensureConnection(): Promise<NatsConnection> {
     if (!this.connection) {
       this.connection = await connect(this.options);
+      if (this.dlqEnabled) {
+        this.js = this.connection.jetstream();
+      }
     }
     return this.connection;
   }
 
   /**
-   * Publish an event to NATS.
-   * @param event - The event name
-   * @param data - The event data
+   * Ensure JetStream client is available.
    */
-  async publish(event: string, data: any): Promise<void> {
-    const connection = await this.ensureConnection();
-    const encodedData = this.codec.encode(data);
-    connection.publish(event, encodedData);
+  private async ensureJetStream(): Promise<JetStreamClient> {
+    if (!this.js) {
+      await this.ensureConnection();
+      if (!this.js) {
+        throw new Error("JetStream is not available");
+      }
+    }
+    return this.js;
   }
 
   /**
-   * Subscribe to an event from NATS.
-   * @param event - The event name
-   * @param handler - The handler function
-   * @param opts - Optional delivery configuration
+   * Register a stream for an event if not already registered.
+   */
+  private async registerStream(event: string): Promise<void> {
+    if (this.registeredStreams.has(event)) return;
+    
+    // if autoCreateStreams is false, assume the stream already exists
+    if (!this.dlqConfig.autoCreateStreams) {
+      this.registeredStreams.add(event);
+      return;
+    }
+
+    // register the jetstreamManager if not already created
+    if (!this.jsm) {
+      const js = await this.ensureJetStream();
+      this.jsm = await js.jetstreamManager();
+    }
+
+    // Create stream if not already created
+    const streamConfig: Partial<StreamConfig> = {
+      name: event,
+      subjects: [event],
+      storage: StorageType.File, // or "memory"
+      retention: RetentionPolicy.Limits,
+      max_msgs: 1000,
+      max_bytes: 10 * 1024 * 1024, // 10MB
+      // TODO: investigate why max_age breaks everything
+      // max_age: 60 * 60 * 10000 // 10 hours
+    }
+
+    // create the stream if not already created
+    try {
+      await this.jsm.streams.add(streamConfig);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  /**
+   * Publish to DLQ.
+   */
+  private async publishToDLQ(
+    event: string,
+    metadata: DLQMessageMetadata
+  ): Promise<void> {
+    if (!this.dlqEnabled) return;
+
+    const js = await this.ensureJetStream();
+    const dlqStreamName = `${event}${this.dlqConfig.streamSuffix}`;
+
+    const encodedData = this.codec.encode(metadata);
+    await js.publish(dlqStreamName, encodedData);
+  }
+
+  /**
+   * Set up subscription for an event with DLQ support.
+   */
+  private async setupSubscription(
+    event: string,
+    handler: (data: any) => void,
+    delivery?: Delivery
+  ): Promise<void> {
+    await this.ensureConnection();
+    await this.registerStream(event);
+
+    const queueGroup = delivery === "queue" ? `auk-${event}` : undefined;
+    const subscriptionKey = `${event}-${queueGroup || "broadcast"}`;
+
+    if (this.subscriptions.has(subscriptionKey)) {
+      return; // Already subscribed
+    }
+
+    if (this.dlqEnabled) {
+      const js = await this.ensureJetStream();
+
+      const subscription = await js.subscribe(event, {
+        queue: queueGroup,
+        config: {
+          ack_policy: AckPolicy.Explicit,
+          deliver_policy: DeliverPolicy.All,
+          replay_policy: ReplayPolicy.Instant,
+          max_deliver: this.dlqConfig.maxDeliver,
+          ack_wait: 30 * 1000000000, // 30 seconds in nanoseconds
+        },
+      });
+
+      this.subscriptions.set(subscriptionKey, subscription);
+
+      // Process messages with DLQ support
+      (async () => {
+        for await (const message of subscription) {
+          const metadata: MessageMetadata = {
+            attemptCount: message.info?.redeliveryCount || 0,
+            timestamp: Date.now(),
+            messageId:
+              message.headers?.get("messageId") || `${event}-${Date.now()}`,
+            delivery,
+          };
+
+          try {
+            const data = this.codec.decode(message.data);
+            const eventObj: AukEvent = { event, data };
+
+            // Fire hooks via context if available
+            const context = (global as any).__aukMiddlewareContext;
+            if (context?.hooks?.onReceived) {
+              await context.hooks.onReceived(eventObj, metadata);
+            }
+
+            await handler(data);
+            message.ack();
+
+            if (context?.hooks?.onSuccess) {
+              await context.hooks.onSuccess(eventObj, metadata);
+            }
+          } catch (error) {
+            const eventObj: AukEvent = {
+              event,
+              data: this.codec.decode(message.data),
+            };
+            const context = (global as any).__aukMiddlewareContext;
+
+            if (context?.hooks?.onFailed) {
+              await context.hooks.onFailed(eventObj, error as Error, metadata);
+            }
+
+            // Handle DLQ logic
+            if (
+              this.dlqEnabled &&
+              metadata.attemptCount >= this.dlqConfig.maxDeliver - 1
+            ) {
+              const dlqMetadata: DLQMessageMetadata = {
+                originalEvent: event,
+                originalData: this.codec.decode(message.data),
+                attemptCount: metadata.attemptCount,
+                timestamp: Date.now(),
+                error: error instanceof Error ? error.message : String(error),
+              };
+
+              await this.publishToDLQ(event, dlqMetadata);
+              message.ack(); // Acknowledge to prevent infinite redelivery
+
+              if (context?.hooks?.onDLQ) {
+                await context.hooks.onDLQ(eventObj, dlqMetadata);
+              }
+            } else {
+              if (context?.hooks?.onRetry) {
+                await context.hooks.onRetry(
+                  eventObj,
+                  metadata.attemptCount + 1,
+                  metadata
+                );
+              }
+              message.nak(); // Negative acknowledgment for retry
+            }
+          }
+        }
+      })().catch((error) => {
+        console.error(`[NATS] Subscription error for ${event}:`, error);
+      });
+    } else {
+      // Regular NATS subscription without DLQ
+      const subject = event;
+      const subscription = this.connection!.subscribe(subject, {
+        queue: queueGroup,
+      });
+      this.subscriptions.set(subscriptionKey, subscription);
+
+      (async () => {
+        for await (const message of subscription) {
+          try {
+            const data = this.codec.decode(message.data);
+            await handler(data);
+          } catch (error) {
+            console.error(
+              `[NATS] Error processing message for ${event}:`,
+              error
+            );
+          }
+        }
+      })().catch((error) => {
+        console.error(`[NATS] Subscription error for ${event}:`, error);
+      });
+    }
+  }
+
+  /**
+   * Publish an event.
+   */
+  async publish(event: string, data: any): Promise<void> {
+    await this.ensureConnection();
+    await this.registerStream(event);
+
+    if (this.dlqEnabled) {
+      const js = await this.ensureJetStream();
+      const encodedData = this.codec.encode(data);
+      await js.publish(event, encodedData);
+    } else {
+      const encodedData = this.codec.encode(data);
+      this.connection!.publish(event, encodedData);
+    }
+  }
+
+  /**
+   * Subscribe to an event.
    */
   subscribe(
     event: string,
     handler: (data: any) => void,
-    opts?: { delivery?: Delivery }
+    delivery?: Delivery
   ): void {
-    this.ensureConnection()
-      .then((connection) => {
-        const subject = event;
-        const queueGroup =
-          opts?.delivery === "queue" ? `auk-${event}` : undefined;
-        const subscriptionKey = `${event}-${queueGroup || "broadcast"}`;
-
-        // Check if we already have a subscription for this event+delivery combination
-        if (this.subscriptions.has(subscriptionKey)) {
-          return;
-        }
-
-        const subscription = connection.subscribe(subject, {
-          queue: queueGroup,
-        });
-        this.subscriptions.set(subscriptionKey, subscription);
-
-        // Process messages asynchronously
-        (async () => {
-          for await (const message of subscription) {
-            try {
-              const data = this.codec.decode(message.data);
-              handler(data);
-            } catch (error) {
-              console.error(
-                `[NATS] Error processing message for ${event}:`,
-                error
-              );
-            }
-          }
-        })().catch((error) => {
-          console.error(`[NATS] Subscription error for ${event}:`, error);
-        });
-      })
-      .catch((error) => {
-        console.error(`[NATS] Failed to subscribe to ${event}:`, error);
-      });
+    this.eventListeners.set(event, { handler, delivery });
+    this.setupSubscription(event, handler, delivery).catch((error) => {
+      console.error(`[NATS] Failed to subscribe to ${event}:`, error);
+    });
   }
 
   /**
-   * Close the NATS connection and clean up subscriptions.
+   * Close connections and clean up.
    */
   async close(): Promise<void> {
-    // Drain all subscriptions
     for (const [key, subscription] of this.subscriptions) {
       try {
         subscription.unsubscribe();
@@ -121,35 +356,72 @@ export class NATS implements Broker {
     }
     this.subscriptions.clear();
 
-    // Close connection
     if (this.connection) {
       try {
         await this.connection.drain();
         await this.connection.close();
         this.connection = undefined;
+        this.js = undefined;
       } catch (error) {
         console.error("[NATS] Error closing connection:", error);
       }
     }
   }
+}
 
-  /**
-   * Check if the NATS connection is established.
-   * @returns True if connected, false otherwise
-   */
-  isConnected(): boolean {
-    return this.connection !== undefined && !this.connection.isClosed();
-  }
+/**
+ * Create NATS middleware function.
+ * @param options - NATS middleware options
+ * @returns Advanced middleware function
+ */
+export function natsMiddleware(
+  options: NATSMiddlewareOptions = {}
+): AdvancedMiddlewareFn {
+  const nats = new NATSMiddleware(options);
+  let isInitialized = false;
 
-  /**
-   * Get connection statistics.
-   * @returns Connection stats or null if not connected
-   */
-  getStats() {
-    if (!this.connection) return null;
-    return this.connection.stats();
-  }
+  return async (event: AukEvent, context, next) => {
+    // Store context globally for subscription handlers
+    (global as any).__aukMiddlewareContext = context;
+
+    if (!isInitialized) {
+      // Initialize NATS connection on first use
+      await nats.ensureConnection();
+      isInitialized = true;
+
+      // Register cleanup handler
+      if ((global as any).__aukInstance) {
+        (global as any).__aukInstance.addCleanupHandler("nats-middleware", () =>
+          nats.close()
+        );
+      }
+    }
+
+    // Handle outgoing events (publishing)
+    if (context.isDistributed) {
+      await nats.publish(event.event, event.data);
+    }
+
+    // Continue to next middleware
+    return await next();
+  };
+}
+
+// Convenience function to register event listeners through middleware
+export function createNATSEventBus(options: NATSMiddlewareOptions = {}) {
+  const nats = new NATSMiddleware(options);
+
+  return {
+    subscribe: (
+      event: string,
+      handler: (data: any) => void,
+      delivery?: Delivery
+    ) => {
+      nats.subscribe(event, handler, delivery);
+    },
+    close: () => nats.close(),
+  };
 }
 
 // Re-export types for convenience
-export type { Broker, Delivery } from "../../../core/src/index.js";
+export type { Delivery } from "../../../core/src/index.js";
