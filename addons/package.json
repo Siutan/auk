@@ -1,0 +1,32 @@
+{
+  "name": "auk-addons",
+  "module": "dist/index.js",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./nats": {
+      "import": "./dist/nats.js",
+      "types": "./dist/nats.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "bun run build.ts",
+    "build:all": "bun run build.ts",
+    "dev": "bun run build.ts --watch",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "bun run build.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "private": true,
+  "dependencies": {
+    "nats": "^2.29.3"
+  }
+}

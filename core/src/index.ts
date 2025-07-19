@@ -9,6 +9,47 @@ export { type Static, type TSchema, Type } from "@sinclair/typebox";
 import type { Static, TSchema } from "@sinclair/typebox";
 
 /**
+ * Delivery mode for distributed events.
+ */
+export type Delivery = "queue" | "broadcast";
+
+/**
+ * Basic broker interface for distributed mode.
+ */
+export interface Broker {
+  /**
+   * Publish an event to the broker.
+   * @param event - The event name
+   * @param data - The event data
+   * @returns Promise that resolves when the event is published
+   */
+  publish(event: string, data: any): Promise<void>;
+
+  /**
+   * Subscribe to an event from the broker.
+   * @param event - The event name
+   * @param handler - The handler function
+   * @param opts - Optional delivery configuration
+   */
+  subscribe(
+    event: string,
+    handler: (data: any) => void,
+    opts?: { delivery?: Delivery }
+  ): void;
+
+  /**
+   * Close the broker connection.
+   * @returns Promise that resolves when the broker is closed
+   */
+  close(): Promise<void>;
+}
+
+/**
+ * Auk mode - local or distributed.
+ */
+export type AukMode = "local" | "distributed";
+
+/**
  * Event registry to track event schemas and their types.
  */
 type EventRegistry = Record<string, TSchema>;
@@ -114,6 +155,24 @@ export interface AukContext {
    */
   health: HealthStatus;
   /**
+   * Register a cleanup handler for graceful shutdown.
+   */
+  addCleanupHandler: (name: string, fn: CleanupFn) => void;
+  /**
+   * Auto-cleanup version of setInterval that registers cleanup automatically.
+   * @param callback - Function to execute repeatedly
+   * @param delay - Delay in milliseconds
+   * @returns Interval ID
+   */
+  setInterval: (callback: () => void, delay: number) => NodeJS.Timeout;
+  /**
+   * Auto-cleanup version of setTimeout that registers cleanup automatically.
+   * @param callback - Function to execute after delay
+   * @param delay - Delay in milliseconds
+   * @returns Timeout ID
+   */
+  setTimeout: (callback: () => void, delay: number) => NodeJS.Timeout;
+  /**
    * Any other context fields.
    */
   [key: string]: unknown;
@@ -152,6 +211,10 @@ export interface NamedPlugin<Registry extends EventRegistry = {}> {
    * Plugin function.
    */
   fn: PluginFn<Registry>;
+  /**
+   * Delivery mode for distributed events (only applies in distributed mode).
+   */
+  delivery?: Delivery;
 }
 /**
  * Named module object.
@@ -165,6 +228,10 @@ export interface NamedModule<Registry extends EventRegistry = {}> {
    * Module function.
    */
   fn: ModuleFn<Registry>;
+  /**
+   * Delivery mode for distributed events (only applies in distributed mode).
+   */
+  delivery?: Delivery;
 }
 
 /**
@@ -194,15 +261,26 @@ export class AukBus<Registry extends EventRegistry = {}> {
   }[] = [];
   private hasMiddleware = false;
   private eventSchemas: Partial<Registry> = {};
+  private mode: AukMode;
+  private broker?: Broker;
 
   /**
    * Create a new AukBus instance.
    * @param emitter - Optional NodeEventEmitter instance.
    * @param maxListeners - Maximum number of event listeners (0 = unlimited)
+   * @param mode - Operating mode (local or distributed)
+   * @param broker - Broker instance for distributed mode
    */
-  constructor(emitter?: NodeEventEmitter, maxListeners = 0) {
+  constructor(
+    emitter?: NodeEventEmitter,
+    maxListeners = 0,
+    mode: AukMode = "local",
+    broker?: Broker
+  ) {
     this.emitter = emitter || new NodeEventEmitter();
     this.emitter.setMaxListeners(maxListeners); // Allow unlimited listeners by default, or use config
+    this.mode = mode;
+    this.broker = broker;
   }
 
   /**
@@ -341,6 +419,21 @@ export class AukBus<Registry extends EventRegistry = {}> {
   }): boolean;
   emitSync(eventObj: AukEvent): boolean;
   emitSync(eventObj: AukEvent): boolean {
+    if (this.mode === "distributed" && this.broker) {
+      // In distributed mode, only publish to broker (broker handles all delivery)
+      this.broker
+        .publish(eventObj.event as string, eventObj.data)
+        .catch((error) => {
+          console.error(
+            `[AukBus] Failed to publish event ${eventObj.event}:`,
+            error
+          );
+        });
+      // Return true since we published (though we can't know if there were listeners)
+      return true;
+    }
+
+    // In local mode, emit locally only
     return this.emitSyncInternal(eventObj);
   }
 
@@ -357,6 +450,13 @@ export class AukBus<Registry extends EventRegistry = {}> {
   async emit(eventObj: AukEvent): Promise<boolean> {
     // Fast path: skip validation and async processing when no middleware
     if (!this.hasMiddleware) {
+      if (this.mode === "distributed" && this.broker) {
+        // In distributed mode, only publish to broker (broker handles all delivery)
+        await this.broker.publish(eventObj.event as string, eventObj.data);
+        return true;
+      }
+
+      // In local mode, emit locally only
       return this.emitSyncInternal(eventObj);
     }
 
@@ -372,6 +472,17 @@ export class AukBus<Registry extends EventRegistry = {}> {
     }
 
     const processedEvent = await this.applyMiddleware(eventObj);
+
+    if (this.mode === "distributed" && this.broker) {
+      // In distributed mode, only publish to broker (broker handles all delivery)
+      await this.broker.publish(
+        processedEvent.event as string,
+        processedEvent.data
+      );
+      return true;
+    }
+
+    // In local mode, emit locally only
     return this.emitSyncInternal(processedEvent);
   }
 
@@ -379,21 +490,45 @@ export class AukBus<Registry extends EventRegistry = {}> {
    * Register an event listener. Supports wildcard patterns.
    * @param event - The event name or wildcard pattern (e.g., "user.*", "*.created", "*")
    * @param listener - The listener function.
+   * @param opts - Optional delivery configuration for distributed mode.
    * @returns The AukBus instance.
    */
   on<EventName extends keyof Registry>(
     event: EventName,
-    listener: (data: InferEventData<Registry, EventName & string>) => void
+    listener: (data: InferEventData<Registry, EventName & string>) => void,
+    opts?: { delivery?: Delivery }
   ): this;
-  on(event: string, listener: (data: any) => void): this;
-  on(event: string, listener: (data: any) => void): this {
-    if (this.isWildcardPattern(event)) {
-      // Pre-compile regex for better performance
-      const regex = this.compilePattern(event);
-      this.wildcardListeners.push({ pattern: event, listener, regex });
+  on(
+    event: string,
+    listener: (data: any) => void,
+    opts?: { delivery?: Delivery }
+  ): this;
+  on(
+    event: string,
+    listener: (data: any) => void,
+    opts: { delivery?: Delivery } = {}
+  ): this {
+    if (this.mode === "distributed" && this.broker) {
+      // In distributed mode, only subscribe via broker (for non-wildcard events)
+      if (!this.isWildcardPattern(event)) {
+        this.broker.subscribe(event, listener, opts);
+      } else {
+        // For wildcard patterns in distributed mode, fall back to local for now
+        // TODO: Implement wildcard support in broker
+        const regex = this.compilePattern(event);
+        this.wildcardListeners.push({ pattern: event, listener, regex });
+      }
     } else {
-      this.emitter.on(event, listener);
+      // In local mode, register locally only
+      if (this.isWildcardPattern(event)) {
+        // Pre-compile regex for better performance
+        const regex = this.compilePattern(event);
+        this.wildcardListeners.push({ pattern: event, listener, regex });
+      } else {
+        this.emitter.on(event, listener);
+      }
     }
+
     return this;
   }
 
@@ -535,11 +670,21 @@ export class Auk<Registry extends EventRegistry = {}> {
    * The Auk event bus instance.
    */
   public eventBus: AukBus<Registry>;
-  private _plugins: { name: string; fn: PluginFn<Registry> }[] = [];
-  private _modules: { name: string; fn: ModuleFn<Registry> }[] = [];
+  private _plugins: {
+    name: string;
+    fn: PluginFn<Registry>;
+    delivery?: Delivery;
+  }[] = [];
+  private _modules: {
+    name: string;
+    fn: ModuleFn<Registry>;
+    delivery?: Delivery;
+  }[] = [];
   private _cleanupHandlers: { name: string; fn: CleanupFn }[] = [];
   private _isShuttingDown = false;
   private _shutdownResolver?: () => void;
+  private _mode: AukMode;
+  private _broker?: Broker;
 
   /**
    * Create a new Auk instance.
@@ -548,9 +693,16 @@ export class Auk<Registry extends EventRegistry = {}> {
   constructor(options?: {
     config?: AukConfig;
     logger?: AukContext["logger"];
+    mode?: AukMode;
+    broker?: Broker;
     [key: string]: unknown;
   }) {
-    const { config, logger, ...rest } = options ?? {};
+    const { config, logger, mode, broker, ...rest } = options ?? {};
+
+    // Store mode and broker
+    this._mode = mode ?? "local";
+    this._broker = broker;
+
     // Provide a default config if none is supplied
     const defaultConfig: Required<AukConfig> = {
       env: "development",
@@ -579,12 +731,30 @@ export class Auk<Registry extends EventRegistry = {}> {
       config: fullConfig,
       logger: serviceLogger,
       health: { status: "healthy", checks: {} },
+      addCleanupHandler: (name: string, fn: CleanupFn) =>
+        this.addCleanupHandler(name, fn),
+      setInterval: (callback: () => void, delay: number) => {
+        const intervalId = setInterval(callback, delay);
+        this.addCleanupHandler(`auto-interval-${intervalId}`, () => {
+          clearInterval(intervalId);
+        });
+        return intervalId;
+      },
+      setTimeout: (callback: () => void, delay: number) => {
+        const timeoutId = setTimeout(callback, delay);
+        this.addCleanupHandler(`auto-timeout-${timeoutId}`, () => {
+          clearTimeout(timeoutId);
+        });
+        return timeoutId;
+      },
       ...rest,
     };
     _globalAukConfig = fullConfig;
     this.eventBus = new AukBus<Registry>(
       undefined,
-      fullConfig.maxEventListeners
+      fullConfig.maxEventListeners,
+      this._mode,
+      this._broker
     );
 
     // Setup graceful shutdown handlers
@@ -688,6 +858,20 @@ export class Auk<Registry extends EventRegistry = {}> {
       }
     }
 
+    // Close broker connection if in distributed mode
+    if (this._mode === "distributed" && this._broker) {
+      try {
+        this.context.logger.info("[Auk] Closing broker connection...");
+        await this._broker.close();
+        this.context.logger.info("[Auk] Broker connection closed");
+      } catch (error) {
+        this.context.logger.error(
+          "[Auk] Failed to close broker connection:",
+          error
+        );
+      }
+    }
+
     this.context.logger.info("[Auk] Shutdown complete");
   }
 
@@ -700,7 +884,9 @@ export class Auk<Registry extends EventRegistry = {}> {
     for (const plugin of pluginFns) {
       const name = getPluginName(plugin);
       if (!name) throw new Error("All plugins must have a name");
-      this._plugins.push({ name, fn: getPluginFn(plugin) });
+      const delivery =
+        typeof plugin === "function" ? undefined : plugin.delivery;
+      this._plugins.push({ name, fn: getPluginFn(plugin), delivery });
     }
     return this;
   }
@@ -714,7 +900,8 @@ export class Auk<Registry extends EventRegistry = {}> {
     for (const mod of moduleFns) {
       const name = getModuleName(mod);
       if (!name) throw new Error("All modules must have a name");
-      this._modules.push({ name, fn: getModuleFn(mod) });
+      const delivery = typeof mod === "function" ? undefined : mod.delivery;
+      this._modules.push({ name, fn: getModuleFn(mod), delivery });
     }
     return this;
   }
@@ -730,6 +917,22 @@ export class Auk<Registry extends EventRegistry = {}> {
       const contextWithLogger = {
         ...this.context,
         logger: prefixLogger(this.context.logger, name),
+        addCleanupHandler: (cleanupName: string, cleanupFn: CleanupFn) =>
+          this.addCleanupHandler(`${name}-${cleanupName}`, cleanupFn),
+        setInterval: (callback: () => void, delay: number) => {
+          const intervalId = setInterval(callback, delay);
+          this.addCleanupHandler(`${name}-auto-interval-${intervalId}`, () => {
+            clearInterval(intervalId);
+          });
+          return intervalId;
+        },
+        setTimeout: (callback: () => void, delay: number) => {
+          const timeoutId = setTimeout(callback, delay);
+          this.addCleanupHandler(`${name}-auto-timeout-${timeoutId}`, () => {
+            clearTimeout(timeoutId);
+          });
+          return timeoutId;
+        },
       };
       fn(this.eventBus, contextWithLogger);
       this.context.logger.info(`[Auk] Module loaded: ${name}`);
@@ -739,6 +942,22 @@ export class Auk<Registry extends EventRegistry = {}> {
       const contextWithLogger = {
         ...this.context,
         logger: prefixLogger(this.context.logger, name),
+        addCleanupHandler: (cleanupName: string, cleanupFn: CleanupFn) =>
+          this.addCleanupHandler(`${name}-${cleanupName}`, cleanupFn),
+        setInterval: (callback: () => void, delay: number) => {
+          const intervalId = setInterval(callback, delay);
+          this.addCleanupHandler(`${name}-auto-interval-${intervalId}`, () => {
+            clearInterval(intervalId);
+          });
+          return intervalId;
+        },
+        setTimeout: (callback: () => void, delay: number) => {
+          const timeoutId = setTimeout(callback, delay);
+          this.addCleanupHandler(`${name}-auto-timeout-${timeoutId}`, () => {
+            clearTimeout(timeoutId);
+          });
+          return timeoutId;
+        },
       };
       await fn(contextWithLogger, this.eventBus);
       this.context.logger.info(`[Auk] Plugin loaded: ${name}`);
@@ -763,6 +982,9 @@ export class Auk<Registry extends EventRegistry = {}> {
         );
         await this.shutdown();
         resolve();
+        // if the resolve doesn't work, exit the process
+        // idk if i should do this on a timeout or something, leaving it for now since its not causing any issues
+        process.exit(0);
       };
 
       process.on("SIGINT", () => shutdownHandler("SIGINT"));
