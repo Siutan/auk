@@ -24,10 +24,6 @@ function getUsage() {
   };
 }
 
-async function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 describe("Auk Performance Tests", () => {
   it("measures event emission overhead vs raw EventEmitter", async () => {
     const iterations = 100_000;
