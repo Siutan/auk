@@ -1,4 +1,4 @@
-import { Auk } from "../src";
+import { Auk } from "../../src";
 
 const app = new Auk();
 
