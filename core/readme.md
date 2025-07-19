@@ -173,6 +173,59 @@ Auk provides `context.setInterval()` and `context.setTimeout()` that automatical
 
 ---
 
+## Roadmap
+
+Auk follows a modular architecture that keeps the core lightweight while providing extensibility through addons. Here's our development roadmap:
+
+### **Core Library** ✅
+
+**Keep the core as small, stable, and dependency-free as possible!**
+
+- **Type-Safe Event Bus**: ✅ Complete
+- **Modular Plugin/Module System**: ✅ Complete
+- **Distributed Mode with NATS**: ✅ Complete
+- **Dead Letter Queue (DLQ) for Distributed Instances**: ✅ Complete (via NATS JetStream)
+- **Lifecycle Hooks**: 🔄 Partially Complete
+- **Retry and DLQ Mechanism (interfaces)**: 🔄 In Progress
+  - API contract for retry, backoff, DLQ
+  - Event/job metadata for retries, attempts, and DLQ status
+  - Core lifecycle events for failure, success, retry, etc.
+
+### **Addons** 🚧
+
+**All heavier features, extra dependencies, or optional integrations belong here.**
+
+- **Persistence/Replay**: 📋 Planned
+  - Adapters for event or job persistence (Redis Streams, JetStream, DB, etc.)
+  - Replay tools/utilities
+
+- **Monitoring/Instrumentation**: 📋 Planned
+  - Plugins for Prometheus, Datadog, Grafana, Sentry, etc.
+  - Metrics export/forwarders
+
+- **Integrations**: 📋 Planned
+  - Email, queues, cron/scheduler, webhooks, HTTP, databases, etc.
+
+- **Security/Multi-Tenant**: 📋 Thinking about it
+  - Middleware/plugins for auth, RBAC, tenancy, encryption
+
+- **UI/Dashboard**: 📋 Thinking about it
+  - As a completely separate package/service, or in `/addons/dashboard`
+
+  ### **Status Legend**
+
+- ✅ Complete
+- 🔄 In Progress
+- 📋 Planned
+
+### **Architecture Principles**
+
+- **Core = Contracts, Hooks, Lifecycle**: Provides extensibility points so users can hook in their own retry, DLQ, monitoring, etc.
+- **Addons = Everything Else**: Implement actual integrations, heavy features, and dependencies
+
+Even with the current feature-set (or lack thereof), Auk is designed to be modular and extensible. You can make your own plugins and modules to achieve your specific use-cases. If you end up building something cool, we'll put it in the addons package!
+---
+
 ## License
 
 MIT
