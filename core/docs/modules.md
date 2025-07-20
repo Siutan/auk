@@ -23,6 +23,26 @@ type AukModule = (bus: AukBus, context: AukContext) => void;
 import { AukModule } from "auk";
 
 export const myModule: AukModule = (bus, context) => {
+  // Register lifecycle hooks for monitoring
+  bus.hooks({
+    onReceived: (event, metadata) => {
+      context.logger.info(`Module received event: ${event.event}`, metadata);
+    },
+    onSuccess: (event, metadata) => {
+      context.logger.info(
+        `Module successfully processed: ${event.event}`,
+        metadata
+      );
+    },
+    onFailed: (event, error, metadata) => {
+      context.logger.error(
+        `Module failed to process: ${event.event}`,
+        error,
+        metadata
+      );
+    },
+  });
+
   bus.on("my.event", async (data) => {
     context.logger.info(`Processing event ${data.id} at ${data.timestamp}`);
     // Business logic here

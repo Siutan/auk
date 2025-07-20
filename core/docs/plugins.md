@@ -30,6 +30,27 @@ const MyEventSchema = Type.Object({
 
 export const myPlugin: AukPlugin = async (context, bus) => {
   context.logger.info("My plugin starting...");
+
+  // Register lifecycle hooks for monitoring
+  bus.hooks({
+    onReceived: (event, metadata) => {
+      context.logger.info(`Plugin received event: ${event.event}`, metadata);
+    },
+    onSuccess: (event, metadata) => {
+      context.logger.info(
+        `Plugin successfully processed: ${event.event}`,
+        metadata
+      );
+    },
+    onFailed: (event, error, metadata) => {
+      context.logger.error(
+        `Plugin failed to process: ${event.event}`,
+        error,
+        metadata
+      );
+    },
+  });
+
   bus.emit({
     event: "my.event",
     data: {

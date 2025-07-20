@@ -46,6 +46,16 @@ When you use typed events, plugins and modules get type-checked data:
 app.plugins({
   name: "user-plugin",
   fn: async (context, bus) => {
+    // Register lifecycle hooks for monitoring
+    bus.hooks({
+      onReceived: (event, metadata) => {
+        context.logger.info(`Plugin received: ${event.event}`, metadata);
+      },
+      onSuccess: (event, metadata) => {
+        context.logger.info(`Plugin success: ${event.event}`, metadata);
+      },
+    });
+
     bus.emitSync({
       event: "user.created",
       data: {
@@ -60,6 +70,16 @@ app.plugins({
 app.modules({
   name: "user-module",
   fn: (bus, context) => {
+    // Register lifecycle hooks for monitoring
+    bus.hooks({
+      onReceived: (event, metadata) => {
+        context.logger.info(`Module received: ${event.event}`, metadata);
+      },
+      onSuccess: (event, metadata) => {
+        context.logger.info(`Module success: ${event.event}`, metadata);
+      }
+    });
+    
     bus.on("user.created", (userData) => {
       // userData is typed as { id: string; name: string; email: string; }
       context.logger.info(`New user: ${userData.name} (${userData.email})`);

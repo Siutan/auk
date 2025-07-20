@@ -289,7 +289,10 @@ class NATSMiddleware {
     } else {
       // Regular NATS subscription without DLQ
       const subject = event;
-      const subscription = this.connection!.subscribe(subject, {
+      if (!this.connection) {
+        throw new Error("NATS connection is not initialized");
+      }
+      const subscription = this.connection.subscribe(subject, {
         queue: queueGroup,
       });
       this.subscriptions.set(subscriptionKey, subscription);
@@ -325,7 +328,10 @@ class NATSMiddleware {
       await js.publish(event, encodedData);
     } else {
       const encodedData = this.codec.encode(data);
-      this.connection!.publish(event, encodedData);
+      if (!this.connection) {
+        throw new Error("NATS connection is not initialized");
+      }
+      this.connection.publish(event, encodedData);
     }
   }
 

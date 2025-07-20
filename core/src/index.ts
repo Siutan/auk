@@ -6,6 +6,9 @@ import { EventEmitter as NodeEventEmitter } from "node:events";
 // Re-export TypeBox for convenience
 export { type Static, type TSchema, Type } from "@sinclair/typebox";
 
+// Re-export middleware utilities
+export * from "./middleware/index.js";
+
 import type { Static, TSchema } from "@sinclair/typebox";
 
 /**
@@ -222,6 +225,9 @@ export type AdvancedMiddlewareFn = (
     hooks: LifecycleHooks;
     delivery?: Delivery;
     isDistributed: boolean;
+    state: Record<string, any>;
+    set: (key: string, value: any) => void;
+    get: (key: string) => any;
   },
   next: () => Promise<AukEvent>
 ) => Promise<AukEvent>;
@@ -386,21 +392,21 @@ export type AukModule<Registry extends EventRegistry = {}> =
  * AukBus wraps EventEmitter to enforce event shape and provide type safety.
  */
 export class AukBus<Registry extends EventRegistry = {}> {
-  private emitter: NodeEventEmitter;
-  private middlewares: MiddlewareFn[] = [];
-  private advancedMiddlewares: AdvancedMiddlewareFn[] = [];
-  private wildcardListeners: {
+  protected emitter: NodeEventEmitter;
+  protected middlewares: MiddlewareFn[] = [];
+  protected advancedMiddlewares: AdvancedMiddlewareFn[] = [];
+  protected wildcardListeners: {
     pattern: string;
     listener: (data: EventData) => void;
     once?: boolean;
     regex?: RegExp;
   }[] = [];
-  private hasMiddleware = false;
-  private hasAdvancedMiddleware = false;
-  private eventSchemas: Partial<Registry> = {};
-  private mode: AukMode;
-  private broker?: Broker;
-  private lifecycleHooks: LifecycleHooks = {};
+  protected hasMiddleware = false;
+  protected hasAdvancedMiddleware = false;
+  protected eventSchemas: Partial<Registry> = {};
+  protected mode: AukMode;
+  protected broker?: Broker;
+  protected lifecycleHooks: LifecycleHooks = {};
 
   /**
    * Create a new AukBus instance.
@@ -546,6 +552,22 @@ export class AukBus<Registry extends EventRegistry = {}> {
       const middlewareStack = [...this.advancedMiddlewares];
       let currentIndex = 0;
 
+      // Enhanced context with state management
+      const middlewareState = new Map<string, any>();
+      const context = {
+        metadata,
+        hooks: this.lifecycleHooks,
+        delivery,
+        isDistributed: this.mode === "distributed",
+        state: {},
+        set: (key: string, value: any) => {
+          middlewareState.set(key, value);
+        },
+        get: (key: string) => {
+          return middlewareState.get(key);
+        },
+      };
+
       const next = async (): Promise<AukEvent> => {
         if (currentIndex >= middlewareStack.length) {
           return processedEvent;
@@ -555,13 +577,6 @@ export class AukBus<Registry extends EventRegistry = {}> {
         if (!middleware) {
           return processedEvent;
         }
-
-        const context = {
-          metadata,
-          hooks: this.lifecycleHooks,
-          delivery,
-          isDistributed: this.mode === "distributed",
-        };
 
         return await middleware(processedEvent, context, next);
       };
@@ -803,6 +818,47 @@ export class AukBus<Registry extends EventRegistry = {}> {
       this.emitter.once(event, listener);
     }
     return this;
+  }
+
+  /**
+   * Create a copy of this bus with hooks exposed for plugins and modules.
+   * This allows plugins and modules to register their own lifecycle hooks.
+   * @returns A new AukBus instance with hooks exposed.
+   */
+  createCopyWithHooks(): AukBus<Registry> {
+    // Create a new bus instance that shares the same underlying emitter and configuration
+    const bus = new AukBus<Registry>(
+      this.emitter,
+      0, // maxListeners will be set by the parent
+      this.mode,
+      this.broker
+    );
+
+    // Copy over any existing event schemas
+    bus.eventSchemas = { ...this.eventSchemas };
+
+    // Copy over any existing middleware
+    bus.middlewares = [...this.middlewares];
+    bus.advancedMiddlewares = [...this.advancedMiddlewares];
+    bus.hasMiddleware = this.hasMiddleware;
+    bus.hasAdvancedMiddleware = this.hasAdvancedMiddleware;
+
+    // Copy over any existing lifecycle hooks
+    bus.lifecycleHooks = { ...this.lifecycleHooks };
+
+    // Share wildcard listeners reference instead of copying
+    // This ensures all bus instances share the same wildcard listeners
+    bus.wildcardListeners = this.wildcardListeners;
+
+    return bus;
+  }
+
+  /**
+   * Remove all event listeners from the underlying emitter.
+   * This is useful for cleanup during shutdown.
+   */
+  removeAllListeners(): void {
+    this.emitter.removeAllListeners();
   }
 }
 
@@ -1101,6 +1157,16 @@ export class Auk<Registry extends EventRegistry = {}> {
   }
 
   /**
+   * Create a bus instance with hooks exposed for plugins and modules.
+   * This allows plugins and modules to register their own lifecycle hooks.
+   * @param name - The name of the plugin or module.
+   * @returns A new AukBus instance with hooks exposed.
+   */
+  private createBusWithHooks(name: string): AukBus<Registry> {
+    return this.eventBus.createCopyWithHooks();
+  }
+
+  /**
    * Setup process signal handlers for graceful shutdown.
    * This is now handled in the start() method to avoid conflicts.
    */
@@ -1150,10 +1216,31 @@ export class Auk<Registry extends EventRegistry = {}> {
    * @returns A promise that resolves when shutdown is complete.
    */
   async stop(): Promise<void> {
+    if (this._isShuttingDown) {
+      // If already shutting down, wait for the existing shutdown to complete
+      return new Promise<void>((resolve) => {
+        if (this._shutdownResolver) {
+          const originalResolver = this._shutdownResolver;
+          this._shutdownResolver = () => {
+            originalResolver();
+            resolve();
+          };
+        } else {
+          resolve();
+        }
+      });
+    }
+
     await this.shutdown();
     if (this._shutdownResolver) {
       this._shutdownResolver();
       this._shutdownResolver = undefined;
+    }
+
+    // For tests, we don't want to exit the process
+    // Only exit if this is not a test environment
+    if (process.env.NODE_ENV !== "test" && !process.env.BUN_TEST) {
+      process.exit(0);
     }
   }
 
@@ -1196,6 +1283,18 @@ export class Auk<Registry extends EventRegistry = {}> {
       }
     }
 
+    // Remove all event listeners from the event bus
+    try {
+      this.context.logger.info("[Auk] Removing event listeners...");
+      this.eventBus.removeAllListeners();
+      this.context.logger.info("[Auk] Event listeners removed");
+    } catch (error) {
+      this.context.logger.error(
+        "[Auk] Failed to remove event listeners:",
+        error
+      );
+    }
+
     this.context.logger.info("[Auk] Shutdown complete");
   }
 
@@ -1233,6 +1332,7 @@ export class Auk<Registry extends EventRegistry = {}> {
   /**
    * Start the Auk service, loading modules and plugins.
    * This method will block and keep the process alive until a shutdown signal is received.
+   * For tests, use startNonBlocking() instead.
    * @returns A promise that resolves when shutdown is complete.
    */
   async start() {
@@ -1258,7 +1358,10 @@ export class Auk<Registry extends EventRegistry = {}> {
           return timeoutId;
         },
       };
-      fn(this.eventBus, contextWithLogger);
+
+      // Create a bus with hooks exposed for the module
+      const moduleBus = this.createBusWithHooks(name);
+      fn(moduleBus, contextWithLogger);
       this.context.logger.info(`[Auk] Module loaded: ${name}`);
     }
     // Then run plugins (emitters)
@@ -1283,8 +1386,19 @@ export class Auk<Registry extends EventRegistry = {}> {
           return timeoutId;
         },
       };
-      await fn(contextWithLogger, this.eventBus);
-      this.context.logger.info(`[Auk] Plugin loaded: ${name}`);
+
+      // Create a bus with hooks exposed for the plugin
+      const pluginBus = this.createBusWithHooks(name);
+      try {
+        await fn(contextWithLogger, pluginBus);
+        this.context.logger.info(`[Auk] Plugin loaded: ${name}`);
+      } catch (error) {
+        this.context.logger.error(
+          `[Auk] Failed to load plugin '${name}':`,
+          error
+        );
+        // Continue loading other plugins
+      }
     }
     this.context.logger.info(
       `[Auk] Service '${this.context.config.serviceName}' started!`
@@ -1306,8 +1420,8 @@ export class Auk<Registry extends EventRegistry = {}> {
         );
         await this.shutdown();
         resolve();
-        // if the resolve doesn't work, exit the process
-        // idk if i should do this on a timeout or something, leaving it for now since its not causing any issues
+
+        // Force exit after shutdown is complete
         process.exit(0);
       };
 
@@ -1323,6 +1437,87 @@ export class Auk<Registry extends EventRegistry = {}> {
       this.addCleanupHandler("keep-alive-timeout", () => {
         clearTimeout(keepAliveTimeout);
       });
+
+      // Also clean up event listeners on shutdown
+      this.addCleanupHandler("remove-event-listeners", () => {
+        process.removeAllListeners("SIGINT");
+        process.removeAllListeners("SIGTERM");
+      });
     });
+  }
+
+  /**
+   * Start the Auk service without blocking (for tests).
+   * This loads modules and plugins but doesn't set up signal handlers or keep the process alive.
+   * @returns A promise that resolves when startup is complete.
+   */
+  async startNonBlocking(): Promise<void> {
+    // Register modules (listeners) first
+    for (const { name, fn } of this._modules) {
+      const contextWithLogger = {
+        ...this.context,
+        logger: prefixLogger(this.context.logger, name),
+        addCleanupHandler: (cleanupName: string, cleanupFn: CleanupFn) =>
+          this.addCleanupHandler(`${name}-${cleanupName}`, cleanupFn),
+        setInterval: (callback: () => void, delay: number) => {
+          const intervalId = setInterval(callback, delay);
+          this.addCleanupHandler(`${name}-auto-interval-${intervalId}`, () => {
+            clearInterval(intervalId);
+          });
+          return intervalId;
+        },
+        setTimeout: (callback: () => void, delay: number) => {
+          const timeoutId = setTimeout(callback, delay);
+          this.addCleanupHandler(`${name}-auto-timeout-${timeoutId}`, () => {
+            clearTimeout(timeoutId);
+          });
+          return timeoutId;
+        },
+      };
+
+      // Create a bus with hooks exposed for the module
+      const moduleBus = this.createBusWithHooks(name);
+      fn(moduleBus, contextWithLogger);
+      this.context.logger.info(`[Auk] Module loaded: ${name}`);
+    }
+    // Then run plugins (emitters)
+    for (const { name, fn } of this._plugins) {
+      const contextWithLogger = {
+        ...this.context,
+        logger: prefixLogger(this.context.logger, name),
+        addCleanupHandler: (cleanupName: string, cleanupFn: CleanupFn) =>
+          this.addCleanupHandler(`${name}-${cleanupName}`, cleanupFn),
+        setInterval: (callback: () => void, delay: number) => {
+          const intervalId = setInterval(callback, delay);
+          this.addCleanupHandler(`${name}-auto-interval-${intervalId}`, () => {
+            clearInterval(intervalId);
+          });
+          return intervalId;
+        },
+        setTimeout: (callback: () => void, delay: number) => {
+          const timeoutId = setTimeout(callback, delay);
+          this.addCleanupHandler(`${name}-auto-timeout-${timeoutId}`, () => {
+            clearTimeout(timeoutId);
+          });
+          return timeoutId;
+        },
+      };
+
+      // Create a bus with hooks exposed for the plugin
+      const pluginBus = this.createBusWithHooks(name);
+      try {
+        await fn(contextWithLogger, pluginBus);
+        this.context.logger.info(`[Auk] Plugin loaded: ${name}`);
+      } catch (error) {
+        this.context.logger.error(
+          `[Auk] Failed to load plugin '${name}':`,
+          error
+        );
+        // Continue loading other plugins
+      }
+    }
+    this.context.logger.info(
+      `[Auk] Service '${this.context.config.serviceName}' started in non-blocking mode!`
+    );
   }
 }

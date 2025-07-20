@@ -2,7 +2,7 @@ import {
   type DLQConfig,
   natsMiddleware,
 } from "../../addons/distributed/nats/index";
-import { Auk, Type } from "../src/index";
+import { Auk, Type } from "../dist/index.js";
 
 // Example configuration with DLQ enabled
 const dlqConfig: DLQConfig = {

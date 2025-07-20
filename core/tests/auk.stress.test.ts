@@ -94,14 +94,13 @@ describe("Auk - Correctness and Stress (Type-safe)", () => {
     });
 
     // Start the Auk service
-    const startPromise = app.start();
+    app.start();
 
     // Wait for the receiving module to finish with timeout
     await Promise.race([done, timeoutPromise]);
 
     // Stop the service properly
     await app.stop();
-    await startPromise;
 
     // Correctness assertions
     expect(received).toBe(eventCount);
