@@ -235,7 +235,7 @@ class NATSMiddleware {
               await context.hooks.onReceived(eventObj, metadata);
             }
 
-            await handler(data);
+            handler(data);
             message.ack();
 
             if (context?.hooks?.onSuccess) {
