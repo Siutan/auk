@@ -50,7 +50,7 @@ describe("Auk Typed Events", () => {
 
     const testPlugin = {
       name: "test-plugin",
-      fn: async (_context: any, bus: any) => {
+      fn: async (_context: any, bus) => {
         // This should be type-safe
         await bus.emit({
           event: "user.created",

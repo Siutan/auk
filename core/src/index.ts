@@ -174,17 +174,28 @@ export interface Broker {
 export type AukMode = "local" | "distributed";
 
 /**
- * Event registry to track event schemas and their types.
+ * Event schemas type definition for tracking event schemas and their types.
  */
-type EventRegistry = Record<string, TSchema>;
+type EventSchemas = Record<string, TSchema>;
 
 /**
- * Extract event data type from registry for a given event name.
+ * Utility type to merge event schemas without deep type instantiation.
+ * This merges two event schema objects, with the second taking precedence.
  */
-type InferEventData<
-  Registry extends EventRegistry,
-  EventName extends string
-> = EventName extends keyof Registry ? Static<Registry[EventName]> : unknown;
+type MergeEventSchemas<A extends EventSchemas, B extends EventSchemas> = {
+  [K in keyof A | keyof B]: K extends keyof B
+    ? B[K]
+    : K extends keyof A
+    ? A[K]
+    : never;
+};
+
+/**
+ * Extract event data types from event schemas.
+ */
+type EventPayloads<S extends EventSchemas> = {
+  [K in keyof S]: Static<S[K]>;
+};
 
 /**
  * Type representing the event name.
@@ -325,9 +336,9 @@ export interface AukContext {
  * @param bus - The Auk event bus.
  * @returns A promise or void.
  */
-export type PluginFn<Registry extends EventRegistry = {}> = (
+export type PluginFn<S extends EventSchemas = {}> = (
   context: AukContext,
-  bus: AukBus<Registry>
+  bus: AukBus<S>
 ) => Promise<void> | void;
 
 /**
@@ -335,15 +346,15 @@ export type PluginFn<Registry extends EventRegistry = {}> = (
  * @param bus - The Auk event bus.
  * @param context - The Auk context object.
  */
-export type ModuleFn<Registry extends EventRegistry = {}> = (
-  bus: AukBus<Registry>,
+export type ModuleFn<S extends EventSchemas = {}> = (
+  bus: AukBus<S>,
   context: AukContext
 ) => void;
 
 /**
  * Named plugin object.
  */
-export interface NamedPlugin<Registry extends EventRegistry = {}> {
+export interface NamedPlugin<S extends EventSchemas = {}> {
   /**
    * Name of the plugin.
    */
@@ -351,7 +362,7 @@ export interface NamedPlugin<Registry extends EventRegistry = {}> {
   /**
    * Plugin function.
    */
-  fn: PluginFn<Registry>;
+  fn: PluginFn<S>;
   /**
    * Delivery mode for distributed events (only applies in distributed mode).
    */
@@ -360,7 +371,7 @@ export interface NamedPlugin<Registry extends EventRegistry = {}> {
 /**
  * Named module object.
  */
-export interface NamedModule<Registry extends EventRegistry = {}> {
+export interface NamedModule<S extends EventSchemas = {}> {
   /**
    * Name of the module.
    */
@@ -368,7 +379,32 @@ export interface NamedModule<Registry extends EventRegistry = {}> {
   /**
    * Module function.
    */
-  fn: ModuleFn<Registry>;
+  fn: ModuleFn<S>;
+  /**
+   * Delivery mode for distributed events (only applies in distributed mode).
+   */
+  delivery?: Delivery;
+}
+
+/**
+ * Plugin with events that can define its own event schemas.
+ */
+export interface PluginWithEvents<
+  S extends EventSchemas,
+  E extends EventSchemas
+> {
+  /**
+   * Name of the plugin.
+   */
+  name: string;
+  /**
+   * Event schemas that this plugin defines.
+   */
+  events: E;
+  /**
+   * Plugin function that receives a bus with merged event schemas.
+   */
+  fn: PluginFn<S & E>;
   /**
    * Delivery mode for distributed events (only applies in distributed mode).
    */
@@ -378,20 +414,20 @@ export interface NamedModule<Registry extends EventRegistry = {}> {
 /**
  * Type for plugin registration (named or function with optional name).
  */
-export type AukPlugin<Registry extends EventRegistry = {}> =
-  | NamedPlugin<Registry>
-  | (PluginFn<Registry> & { name?: string });
+export type AukPlugin<S extends EventSchemas = {}> =
+  | NamedPlugin<S>
+  | (PluginFn<S> & { name?: string });
 /**
  * Type for module registration (named or function with optional name).
  */
-export type AukModule<Registry extends EventRegistry = {}> =
-  | NamedModule<Registry>
-  | (ModuleFn<Registry> & { name?: string });
+export type AukModule<S extends EventSchemas = {}> =
+  | NamedModule<S>
+  | (ModuleFn<S> & { name?: string });
 
 /**
  * AukBus wraps EventEmitter to enforce event shape and provide type safety.
  */
-export class AukBus<Registry extends EventRegistry = {}> {
+export class AukBus<S extends EventSchemas = {}> {
   protected emitter: NodeEventEmitter;
   protected middlewares: MiddlewareFn[] = [];
   protected advancedMiddlewares: AdvancedMiddlewareFn[] = [];
@@ -403,7 +439,7 @@ export class AukBus<Registry extends EventRegistry = {}> {
   }[] = [];
   protected hasMiddleware = false;
   protected hasAdvancedMiddleware = false;
-  protected eventSchemas: Partial<Registry> = {};
+  protected eventSchemas: Partial<S> = {};
   protected mode: AukMode;
   protected broker?: Broker;
   protected lifecycleHooks: LifecycleHooks = {};
@@ -467,12 +503,33 @@ export class AukBus<Registry extends EventRegistry = {}> {
   event<EventName extends string, Schema extends TSchema>(
     eventName: EventName,
     schema: Schema
-  ): AukBus<Registry & Record<EventName, Schema>> {
-    const newBus = this as any as AukBus<Registry & Record<EventName, Schema>>;
-    (newBus.eventSchemas as any) = {
+  ): AukBus<S & Record<EventName, Schema>> {
+    // Create a truly new bus instance with augmented types
+    const newBus = new AukBus<S & Record<EventName, Schema>>(
+      this.emitter, // Share the same emitter for event continuity
+      this.emitter.getMaxListeners(), // Preserve current maxListeners setting
+      this.mode,
+      this.broker
+    );
+
+    // Copy all existing state to the new instance
+    newBus.eventSchemas = {
       ...this.eventSchemas,
       [eventName]: schema,
-    };
+    } as any;
+
+    // Copy middleware state
+    newBus.middlewares = [...this.middlewares];
+    newBus.advancedMiddlewares = [...this.advancedMiddlewares];
+    newBus.hasMiddleware = this.hasMiddleware;
+    newBus.hasAdvancedMiddleware = this.hasAdvancedMiddleware;
+
+    // Copy lifecycle hooks
+    newBus.lifecycleHooks = { ...this.lifecycleHooks };
+
+    // Share wildcard listeners reference (they operate on the same emitter)
+    newBus.wildcardListeners = this.wildcardListeners;
+
     return newBus;
   }
 
@@ -644,9 +701,9 @@ export class AukBus<Registry extends EventRegistry = {}> {
    * @param eventObj - The event object to emit.
    * @returns True if the event had listeners, false otherwise.
    */
-  emitSync<EventName extends keyof Registry>(eventObj: {
+  emitSync<EventName extends keyof S>(eventObj: {
     event: EventName;
-    data: InferEventData<Registry, EventName & string>;
+    data: EventPayloads<S>[EventName];
   }): boolean;
   emitSync(eventObj: AukEvent): boolean;
   emitSync(eventObj: AukEvent): boolean {
@@ -673,9 +730,9 @@ export class AukBus<Registry extends EventRegistry = {}> {
    * @param eventObj - The event object to emit.
    * @returns True if the event had listeners, false otherwise.
    */
-  async emit<EventName extends keyof Registry>(eventObj: {
+  async emit<EventName extends keyof S>(eventObj: {
     event: EventName;
-    data: InferEventData<Registry, EventName & string>;
+    data: EventPayloads<S>[EventName];
   }): Promise<boolean>;
   async emit(eventObj: AukEvent): Promise<boolean>;
   async emit(eventObj: AukEvent): Promise<boolean> {
@@ -744,9 +801,9 @@ export class AukBus<Registry extends EventRegistry = {}> {
    * @param opts - Optional delivery configuration for distributed mode.
    * @returns The AukBus instance.
    */
-  on<EventName extends keyof Registry>(
+  on<EventName extends keyof S>(
     event: EventName,
-    listener: (data: InferEventData<Registry, EventName & string>) => void,
+    listener: (data: EventPayloads<S>[EventName]) => void,
     opts?: { delivery?: Delivery }
   ): this;
   on(
@@ -777,9 +834,9 @@ export class AukBus<Registry extends EventRegistry = {}> {
    * @param listener - The listener function.
    * @returns The AukBus instance.
    */
-  off<EventName extends keyof Registry>(
+  off<EventName extends keyof S>(
     event: EventName,
-    listener: (data: InferEventData<Registry, EventName & string>) => void
+    listener: (data: EventPayloads<S>[EventName]) => void
   ): this;
   off(event: string, listener: (data: any) => void): this;
   off(event: string, listener: (data: any) => void): this {
@@ -799,9 +856,9 @@ export class AukBus<Registry extends EventRegistry = {}> {
    * @param listener - The listener function.
    * @returns The AukBus instance.
    */
-  once<EventName extends keyof Registry>(
+  once<EventName extends keyof S>(
     event: EventName,
-    listener: (data: InferEventData<Registry, EventName & string>) => void
+    listener: (data: EventPayloads<S>[EventName]) => void
   ): this;
   once(event: string, listener: (data: any) => void): this;
   once(event: string, listener: (data: any) => void): this {
@@ -825,9 +882,9 @@ export class AukBus<Registry extends EventRegistry = {}> {
    * This allows plugins and modules to register their own lifecycle hooks.
    * @returns A new AukBus instance with hooks exposed.
    */
-  createCopyWithHooks(): AukBus<Registry> {
+  createCopyWithHooks(): AukBus<S> {
     // Create a new bus instance that shares the same underlying emitter and configuration
-    const bus = new AukBus<Registry>(
+    const bus = new AukBus<S>(
       this.emitter,
       0, // maxListeners will be set by the parent
       this.mode,
@@ -851,6 +908,57 @@ export class AukBus<Registry extends EventRegistry = {}> {
     bus.wildcardListeners = this.wildcardListeners;
 
     return bus;
+  }
+
+  /**
+   * Merge listeners from another AukBus instance.
+   * This is used for the .use() method to combine multiple bus instances.
+   * @param other - The other AukBus instance to merge listeners from
+   */
+  mergeListenersFrom<T extends EventSchemas>(other: AukBus<T>): void {
+    // Merge exact event listeners
+    const otherEmitter = (other as any).emitter as NodeEventEmitter;
+    if (otherEmitter) {
+      const eventNames = otherEmitter.eventNames();
+      for (const eventName of eventNames) {
+        const listeners = otherEmitter.listeners(eventName);
+        for (const listener of listeners) {
+          this.emitter.on(eventName, listener as any);
+        }
+      }
+    }
+
+    // Merge wildcard listeners
+    const otherWildcardListeners = (other as any).wildcardListeners;
+    if (Array.isArray(otherWildcardListeners)) {
+      this.wildcardListeners.push(...otherWildcardListeners);
+    }
+
+    // Merge middleware
+    const otherMiddlewares = (other as any).middlewares;
+    if (Array.isArray(otherMiddlewares)) {
+      this.middlewares.push(...otherMiddlewares);
+      this.hasMiddleware = this.hasMiddleware || otherMiddlewares.length > 0;
+    }
+
+    const otherAdvancedMiddlewares = (other as any).advancedMiddlewares;
+    if (Array.isArray(otherAdvancedMiddlewares)) {
+      this.advancedMiddlewares.push(...otherAdvancedMiddlewares);
+      this.hasAdvancedMiddleware =
+        this.hasAdvancedMiddleware || otherAdvancedMiddlewares.length > 0;
+    }
+
+    // Merge lifecycle hooks
+    const otherLifecycleHooks = (other as any).lifecycleHooks;
+    if (otherLifecycleHooks) {
+      this.lifecycleHooks = { ...this.lifecycleHooks, ...otherLifecycleHooks };
+    }
+
+    // Merge event schemas
+    const otherEventSchemas = (other as any).eventSchemas;
+    if (otherEventSchemas) {
+      this.eventSchemas = { ...this.eventSchemas, ...otherEventSchemas };
+    }
   }
 
   /**
@@ -878,9 +986,7 @@ export function getAukConfig(): Required<AukConfig> {
  * @param plugin - The plugin object or function.
  * @returns The plugin name.
  */
-function getPluginName<Registry extends EventRegistry>(
-  plugin: AukPlugin<Registry>
-): string {
+function getPluginName<S extends EventSchemas>(plugin: AukPlugin<S>): string {
   if (typeof plugin === "function") return plugin.name || "anonymous-plugin";
   return plugin.name;
 }
@@ -889,9 +995,7 @@ function getPluginName<Registry extends EventRegistry>(
  * @param mod - The module object or function.
  * @returns The module name.
  */
-function getModuleName<Registry extends EventRegistry>(
-  mod: AukModule<Registry>
-): string {
+function getModuleName<S extends EventSchemas>(mod: AukModule<S>): string {
   if (typeof mod === "function") return mod.name || "anonymous-module";
   return mod.name;
 }
@@ -900,9 +1004,9 @@ function getModuleName<Registry extends EventRegistry>(
  * @param plugin - The plugin object or function.
  * @returns The plugin function.
  */
-function getPluginFn<Registry extends EventRegistry>(
-  plugin: AukPlugin<Registry>
-): PluginFn<Registry> {
+function getPluginFn<S extends EventSchemas>(
+  plugin: AukPlugin<S>
+): PluginFn<S> {
   return typeof plugin === "function" ? plugin : plugin.fn;
 }
 /**
@@ -910,9 +1014,7 @@ function getPluginFn<Registry extends EventRegistry>(
  * @param mod - The module object or function.
  * @returns The module function.
  */
-function getModuleFn<Registry extends EventRegistry>(
-  mod: AukModule<Registry>
-): ModuleFn<Registry> {
+function getModuleFn<S extends EventSchemas>(mod: AukModule<S>): ModuleFn<S> {
   return typeof mod === "function" ? mod : mod.fn;
 }
 
@@ -940,8 +1042,24 @@ function prefixLogger(
 
 /**
  * Main Auk class for service setup, plugin/module registration, and startup.
+ *
+ * @example Fluent Typing Pattern (IMPORTANT!)
+ * ```typescript
+ * // ✅ CORRECT: Always chain .event() calls or assign the result
+ * const app = new Auk({ config: { env: "development" } })
+ *   .event("user.created", Type.Object({ id: Type.String() }))
+ *   .event("user.updated", Type.Object({ id: Type.String() }));
+ *
+ * // ✅ CORRECT: Assign to a new variable
+ * const baseApp = new Auk({ config: { env: "development" } });
+ * const typedApp = baseApp.event("order.placed", Type.Object({ id: Type.String() }));
+ *
+ * // ❌ WRONG: Don't mutate without assignment - types are lost!
+ * const wrongApp = new Auk({ config: { env: "development" } });
+ * wrongApp.event("some.event", Type.Object({ data: Type.String() })); // Types lost!
+ * ```
  */
-export class Auk<Registry extends EventRegistry = {}> {
+export class Auk<S extends EventSchemas = {}> {
   /**
    * The Auk context object.
    */
@@ -949,15 +1067,15 @@ export class Auk<Registry extends EventRegistry = {}> {
   /**
    * The Auk event bus instance.
    */
-  public eventBus: AukBus<Registry>;
+  public eventBus: AukBus<S>;
   private _plugins: {
     name: string;
-    fn: PluginFn<Registry>;
+    fn: PluginFn<S>;
     delivery?: Delivery;
   }[] = [];
   private _modules: {
     name: string;
-    fn: ModuleFn<Registry>;
+    fn: ModuleFn<S>;
     delivery?: Delivery;
   }[] = [];
   private _cleanupHandlers: { name: string; fn: CleanupFn }[] = [];
@@ -1030,7 +1148,7 @@ export class Auk<Registry extends EventRegistry = {}> {
       ...rest,
     };
     _globalAukConfig = fullConfig;
-    this.eventBus = new AukBus<Registry>(
+    this.eventBus = new AukBus<S>(
       undefined,
       fullConfig.maxEventListeners,
       this._mode,
@@ -1053,9 +1171,100 @@ export class Auk<Registry extends EventRegistry = {}> {
   event<EventName extends string, Schema extends TSchema>(
     eventName: EventName,
     schema: Schema
-  ): Auk<Registry & Record<EventName, Schema>> {
-    const newAuk = this as any as Auk<Registry & Record<EventName, Schema>>;
+  ): Auk<S & Record<EventName, Schema>> {
+    // Create a truly new Auk instance with augmented types
+    const newAuk = new Auk<S & Record<EventName, Schema>>({
+      config: this.context.config,
+      logger: this.context.logger,
+      mode: this._mode,
+      broker: this._broker,
+      // Copy any additional context properties
+      ...Object.fromEntries(
+        Object.entries(this.context).filter(
+          ([key]) =>
+            ![
+              "config",
+              "logger",
+              "health",
+              "addCleanupHandler",
+              "setInterval",
+              "setTimeout",
+            ].includes(key)
+        )
+      ),
+    });
+
+    // Copy the event bus with the new schema
     newAuk.eventBus = this.eventBus.event(eventName, schema);
+
+    // Copy all existing state to the new instance
+    // Safe to cast since the new registry extends the old one
+    newAuk._plugins = [...this._plugins] as any;
+    newAuk._modules = [...this._modules] as any;
+    newAuk._cleanupHandlers = [...this._cleanupHandlers];
+    newAuk._isShuttingDown = this._isShuttingDown;
+
+    // Copy health status
+    newAuk.context.health = { ...this.context.health };
+
+    return newAuk;
+  }
+
+  /**
+   * Compose this Auk instance with another one, merging their event schemas and functionality.
+   * This allows for modular composition of different parts of your application.
+   * @param other - The other Auk instance to compose with
+   * @returns A new Auk instance with merged functionality
+   */
+  use<T extends EventSchemas>(other: Auk<T>): Auk<MergeEventSchemas<S, T>> {
+    // Create a new event bus with a fresh emitter to avoid type complexity
+    const mergedBus = new AukBus<MergeEventSchemas<S, T>>(
+      undefined,
+      this.context.config.maxEventListeners,
+      this._mode,
+      this._broker
+    );
+
+    // Manually merge event schemas to maintain type safety
+    const thisSchemas = (this.eventBus as any).eventSchemas;
+    const otherSchemas = (other.eventBus as any).eventSchemas;
+    (mergedBus as any).eventSchemas = { ...thisSchemas, ...otherSchemas };
+
+    // Merge listeners and functionality from both buses
+    mergedBus.mergeListenersFrom(this.eventBus);
+    mergedBus.mergeListenersFrom(other.eventBus);
+
+    // Create a new Auk instance with merged types
+    const newAuk = new Auk<MergeEventSchemas<S, T>>({
+      config: this.context.config,
+      logger: this.context.logger,
+      mode: this._mode,
+      broker: this._broker,
+    });
+
+    // Set the merged event bus
+    newAuk.eventBus = mergedBus;
+
+    // Merge plugins and modules from both instances
+    newAuk._plugins = [...this._plugins, ...other._plugins] as any;
+    newAuk._modules = [...this._modules, ...other._modules] as any;
+
+    // Merge cleanup handlers from both instances
+    newAuk._cleanupHandlers = [
+      ...this._cleanupHandlers,
+      ...other._cleanupHandlers,
+    ];
+
+    // Merge health status
+    newAuk.context.health = {
+      status:
+        this.context.health.status === "healthy" &&
+        other.context.health.status === "healthy"
+          ? "healthy"
+          : "unhealthy",
+      checks: { ...this.context.health.checks, ...other.context.health.checks },
+    };
+
     return newAuk;
   }
 
@@ -1162,7 +1371,7 @@ export class Auk<Registry extends EventRegistry = {}> {
    * @param name - The name of the plugin or module.
    * @returns A new AukBus instance with hooks exposed.
    */
-  private createBusWithHooks(name: string): AukBus<Registry> {
+  private createBusWithHooks(name: string): AukBus<S> {
     return this.eventBus.createCopyWithHooks();
   }
 
@@ -1300,16 +1509,78 @@ export class Auk<Registry extends EventRegistry = {}> {
 
   /**
    * Register one or more plugins.
-   * @param pluginFns - The plugins to register.
-   * @returns The Auk instance (for chaining).
+   * @param pluginFns - The plugins to register (can include plugins with events).
+   * @returns The Auk instance (for chaining) or a new instance if plugins with events are included.
    */
-  plugins(...pluginFns: AukPlugin<Registry>[]) {
+  plugins<E extends EventSchemas>(
+    ...pluginFns: (AukPlugin<S> | PluginWithEvents<S, E>)[]
+  ): Auk<MergeEventSchemas<S, E>> | this {
     for (const plugin of pluginFns) {
-      const name = getPluginName(plugin);
-      if (!name) throw new Error("All plugins must have a name");
-      const delivery =
-        typeof plugin === "function" ? undefined : plugin.delivery;
-      this._plugins.push({ name, fn: getPluginFn(plugin), delivery });
+      // Check if this is a plugin with events
+      if ("events" in plugin && typeof plugin === "object" && plugin.events) {
+        // Handle plugin with events - create new instance with merged schemas
+        const pluginWithEvents = plugin as PluginWithEvents<S, E>;
+
+        // Create a new Auk instance with merged event schemas
+        const newAuk = new Auk<MergeEventSchemas<S, E>>({
+          config: this.context.config,
+          logger: this.context.logger,
+          mode: this._mode,
+          broker: this._broker,
+          // Copy any additional context properties
+          ...Object.fromEntries(
+            Object.entries(this.context).filter(
+              ([key]) =>
+                ![
+                  "config",
+                  "logger",
+                  "health",
+                  "addCleanupHandler",
+                  "setInterval",
+                  "setTimeout",
+                ].includes(key)
+            )
+          ),
+        });
+
+        // Create a new event bus with merged schemas by adding each event from the plugin
+        let newBus = this.eventBus as any;
+        for (const [eventName, schema] of Object.entries(
+          pluginWithEvents.events
+        )) {
+          newBus = newBus.event(eventName, schema);
+        }
+        newAuk.eventBus = newBus;
+
+        // Copy all existing state to the new instance
+        newAuk._plugins = [...this._plugins] as any;
+        newAuk._modules = [...this._modules] as any;
+        newAuk._cleanupHandlers = [...this._cleanupHandlers];
+        newAuk._isShuttingDown = this._isShuttingDown;
+
+        // Copy health status
+        newAuk.context.health = { ...this.context.health };
+
+        // Register the plugin itself
+        newAuk._plugins.push({
+          name: pluginWithEvents.name,
+          fn: pluginWithEvents.fn as any,
+          delivery: pluginWithEvents.delivery,
+        });
+
+        return newAuk as Auk<MergeEventSchemas<S, E>>;
+      } else {
+        // Handle regular plugin
+        const name = getPluginName(plugin as AukPlugin<S>);
+        if (!name) throw new Error("All plugins must have a name");
+        const delivery =
+          typeof plugin === "function" ? undefined : (plugin as any).delivery;
+        this._plugins.push({
+          name,
+          fn: getPluginFn(plugin as AukPlugin<S>),
+          delivery,
+        });
+      }
     }
     return this;
   }
@@ -1319,7 +1590,7 @@ export class Auk<Registry extends EventRegistry = {}> {
    * @param moduleFns - The modules to register.
    * @returns The Auk instance (for chaining).
    */
-  modules(...moduleFns: AukModule<Registry>[]) {
+  modules(...moduleFns: AukModule<S>[]) {
     for (const mod of moduleFns) {
       const name = getModuleName(mod);
       if (!name) throw new Error("All modules must have a name");
@@ -1520,4 +1791,46 @@ export class Auk<Registry extends EventRegistry = {}> {
       `[Auk] Service '${this.context.config.serviceName}' started in non-blocking mode!`
     );
   }
+}
+
+/**
+ * Extract event schemas from an Auk instance type.
+ * This allows for referencing event schemas in plugin definitions.
+ */
+export type EventSchemasOf<T> = T extends Auk<infer S> ? S : never;
+
+/**
+ * Named plugin object with proper typing for event schemas.
+ */
+export interface Plugin<S extends EventSchemas = {}> {
+  /**
+   * Name of the plugin.
+   */
+  name: string;
+  /**
+   * Plugin function with properly typed context and bus.
+   */
+  fn: PluginFn<S>;
+  /**
+   * Delivery mode for distributed events (only applies in distributed mode).
+   */
+  delivery?: Delivery;
+}
+
+/**
+ * Named module object with proper typing for event schemas.
+ */
+export interface Module<S extends EventSchemas = {}> {
+  /**
+   * Name of the module.
+   */
+  name: string;
+  /**
+   * Module function with properly typed bus and context.
+   */
+  fn: ModuleFn<S>;
+  /**
+   * Delivery mode for distributed events (only applies in distributed mode).
+   */
+  delivery?: Delivery;
 }

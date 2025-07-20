@@ -1,5 +1,83 @@
 # Auk Library - Usage Instructions
 
+## 🎯 Recommended Architecture: Composition Pattern
+
+**The recommended way to build with Auk is using the composition pattern with `.use()` for better separation of concerns and modularity.**
+
+### Why Use Composition?
+
+- **Modular**: Each service/domain can be developed separately
+- **Type Safe**: Full TypeScript safety across composed modules
+- **Reusable**: Services can be reused across different applications
+- **Testable**: Each module can be tested in isolation
+- **Maintainable**: Clear separation between different domains
+
+### Quick Example
+
+```typescript
+import { Auk, Type } from "@huddled/auk";
+
+// Create separate domain modules
+const userService = new Auk()
+  .event(
+    "user.created",
+    Type.Object({ id: Type.String(), name: Type.String() })
+  )
+  .modules({
+    name: "user-handler",
+    fn: (bus) => {
+      bus.on("user.created", (data) => console.log(`Welcome ${data.name}!`));
+    },
+  });
+
+const orderService = new Auk()
+  .event(
+    "order.placed",
+    Type.Object({ orderId: Type.String(), total: Type.Number() })
+  )
+  .modules({
+    name: "order-handler",
+    fn: (bus) => {
+      bus.on("order.placed", (data) =>
+        console.log(`Order ${data.orderId} placed!`)
+      );
+    },
+  });
+
+// Compose them together
+const app = userService.use(orderService);
+await app.start();
+```
+
+### Advanced Composition with Plugin Events
+
+```typescript
+// Plugin with its own events
+const notificationPlugin = {
+  name: "notifications",
+  events: {
+    "notification.email": Type.Object({
+      to: Type.String(),
+      subject: Type.String(),
+    }),
+    "notification.sms": Type.Object({
+      phone: Type.String(),
+      message: Type.String(),
+    }),
+  },
+  fn: async (context, bus) => {
+    bus.on("notification.email", (data) =>
+      console.log(`📧 ${data.to}: ${data.subject}`)
+    );
+  },
+};
+
+// Compose with plugin events - unified .plugins() method
+const app = userService.use(orderService).plugins(notificationPlugin); // Automatically detects and merges events
+```
+
+**See `composition-demo.ts` for a comprehensive example!**
+
 ## Quick Start
 
 ### 1. Test the Library
@@ -67,6 +145,54 @@ consumer-service/
 ## Typed Events with TypeBox
 
 Auk supports TypeScript type safety for events using TypeBox schemas (like Elysia). This ensures plugins and modules communicate with correct data types.
+
+### Fluent Typing Pattern (IMPORTANT!)
+
+⚠️ **Always chain `.event()` calls or assign the result to get full type safety!**
+
+The `.event()` method uses a fluent typing pattern similar to Elysia, tRPC, and Zod. Each call returns a **new instance** with augmented types.
+
+```typescript
+// ✅ CORRECT: Chain .event() calls
+const app = new Auk({ config: { env: "development" } })
+  .event(
+    "user.created",
+    Type.Object({
+      id: Type.String(),
+      email: Type.String(),
+      name: Type.String(),
+    })
+  )
+  .event(
+    "user.updated",
+    Type.Object({
+      id: Type.String(),
+      email: Type.Optional(Type.String()),
+      name: Type.Optional(Type.String()),
+    })
+  );
+
+// ✅ CORRECT: Assign the result to a new variable
+const baseApp = new Auk({ config: { env: "development" } });
+const typedApp = baseApp.event(
+  "order.placed",
+  Type.Object({
+    orderId: Type.String(),
+    amount: Type.Number(),
+  })
+);
+
+// ❌ WRONG: Don't do this - you'll lose type safety!
+const wrongApp = new Auk({ config: { env: "development" } });
+wrongApp.event("some.event", Type.Object({ data: Type.String() })); // Types are lost!
+```
+
+Why this matters:
+
+- **Type Safety**: Only the returned instance has the augmented event types
+- **IntelliSense**: You get proper autocomplete and type checking
+- **Runtime Safety**: Schema validation works correctly
+- **Future-Proof**: Your code will work with future Auk versions
 
 ### Basic Typed Event Usage
 
