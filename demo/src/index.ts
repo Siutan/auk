@@ -1,13 +1,21 @@
-import { Auk, Type } from "../../core/src";
-import { signupCompleteModule, signupModule } from "./emitters/email.emitter";
-import { emailProducer } from "./producers/email.producer";
-import { webhookPlugin } from "./plugins/webhook-listener";
+import { Auk, Type, ProducerHandler, AukContext, Static } from "../src";
 
-const app = new Auk({
-  config: {
-    env: "demo",
-    serviceName: "Production demo",
-  },
-});
 
-app.start();
+const Events = {
+  "user.creation": Type.Object({ id: Type.String(), email: Type.String() }),
+  "user.creation.completed": Type.Object({
+    id: Type.String(),
+    email: Type.String(),
+    at: Type.String(),
+  }),
+  "user.creation.failed": Type.Object({
+    id: Type.String(),
+    email: Type.String(),
+    error: Type.String(),
+  }),
+}
+
+// Create Auk instance with events
+const auk = new Auk(Events, { config: { env: "development" } });
+
+// Register a producer

@@ -1,6 +1,6 @@
 import { Auk, Type, ProducerHandler, AukContext, Static } from "../src";
 
-// 1. Define event schemas with TypeBox
+// Define event schemas with TypeBox
 const Events = {
   "user.created": Type.Object({
     id: Type.String(),
@@ -14,7 +14,7 @@ const Events = {
   }),
 } as const;
 
-// 2. Define a custom producer function with correct typing
+// Define a custom producer function with correct typing
 function messageQueueProducer<EventName extends keyof typeof Events>(
   eventName: EventName,
   opts: {
@@ -38,41 +38,50 @@ function messageQueueProducer<EventName extends keyof typeof Events>(
   opts.handler({ payload: mockPayload, ctx, emit });
 }
 
-// 3. Create Auk instance with events
+// Create Auk instance with events
 const auk = new Auk(Events, {
   config: { env: "development" },
 });
 
-// 4. Register the producer
+// Register the producer
 const typedAuk = auk.registerProducer(
   "messageQueueProducer",
   messageQueueProducer
 );
 
-// 5. Get typed methods
+// Get typed methods
 const app = typedAuk.asMethods();
 
-// 6. Use with type safety
+// Use with type safety - now we can omit ctx and emit parameters
 app.messageQueueProducer("order.processed", {
-  handler: ({ payload, ctx, emit }) => {
-    ctx.logger.info("Received order.processed", payload);
-    // Emit 5 times on a 500ms delay from the last
-    for (let i = 0; i < 5; i++) {
-      setTimeout(() => {
-        emit("order.processed", payload);
-      }, i * 500);
-    }
+  handler: ({ payload }) => {
+    // No need to specify ctx and emit if not used
+    console.log(`Processing order ${payload.orderId} for user ${payload.userId}`);
   },
 });
 
-// 7. Register consumers with full type safety
+// We can still use ctx and emit if needed
+app.messageQueueProducer("user.created", {
+  handler: ({ payload, ctx, emit }) => {
+    // With the new ProducerHandler type, TypeScript correctly infers that ctx and
+    // emit are present, so no non-null assertions are needed.
+    ctx.logger.info(`User ${payload.name} created with email ${payload.email}`);
+
+    // Emit another event
+    emit("order.processed", {
+      orderId: Math.floor(Math.random() * 1000000),
+      userId: payload.id,
+      amount: 99.99,
+    });
+  },
+});
+
+// Register consumers with full type safety
 auk.consumer("order.processed", (order, ctx) => {
-  // order is typed as { orderId: number, userId: string, amount: number }
   ctx.logger.info(`Order ${order.orderId} processed for user ${order.userId}`);
 });
 
 auk.consumer("user.created", (user, ctx) => {
-  // user is typed as { id: string, name: string, email: string }
   ctx.logger.info(`User ${user.name} created with email ${user.email}`);
 });
 

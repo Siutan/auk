@@ -17,6 +17,31 @@ Auk now uses a global, augmentable event map and schema registry for type-safe, 
 - `createProducer(event, fn)`: Create a type-safe event producer. The payload type is inferred from the global event map.
 - `createConsumer(event, fn)`: Create a type-safe event consumer. The payload type is inferred from the global event map.
 
+#### Producer Handler Pattern
+
+Producer handlers can now be defined with optional `ctx` and `emit` parameters:
+
+```typescript
+// Full handler with ctx and emit
+app.messageQueueProducer("order.processed", {
+  handler: ({ payload, ctx, emit }) => {
+    ctx.logger.info("Processing order", payload);
+    emit("another.event", { /* data */ });
+  },
+});
+
+// Simplified handler with just payload
+app.messageQueueProducer("order.processed", {
+  handler: ({ payload }) => {
+    console.log(`Processing order ${payload.orderId}`);
+  },
+});
+```
+
+The `ctx` and `emit` parameters are automatically injected by Auk when the handler is called. Thanks to TypeScript's type inference, you only need to include them in your handler's signature if you intend to use them. When you do, they are guaranteed to be present and correctly typed, so no non-null assertions are needed.
+
+This provides a clean and ergonomic way to define producer handlers, whether you need the full context or just the payload.
+
 ### Webhook Handler
 
 - `aukWebhookHandler(req)`: Type-safe handler for `{ type, data }` events. Validates the event type and payload using the global registry.
@@ -77,6 +102,8 @@ A type-safe event bus that wraps Node's EventEmitter.
 - `MiddlewareFn`: Middleware function signature for event processing.
 - `CleanupFn`: Cleanup function signature for graceful shutdown.
 - `HealthStatus`: Health check status object.
+- `ProducerHandler`: Handler function for producers with optional `ctx` and `emit` parameters that are automatically injected by Auk.
+- `ProducerFn`: Producer function signature for event generators.
 
 ---
 
