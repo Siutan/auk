@@ -1,6 +1,25 @@
 # Auk API Reference
 
-This document describes the public API of the Auk library as defined in `src/index.ts`.
+This document describes the public API of the Auk library as defined in `src/index.ts` and the new global event system in `src/events.ts`.
+
+---
+
+## Global Event System (NEW)
+
+Auk now uses a global, augmentable event map and schema registry for type-safe, ergonomic event-driven development.
+
+### Event Registration
+
+- `defineEvent(eventName, schema)`: Register an event and its TypeBox schema globally. Use module augmentation to add to the `AukEvents` interface for type inference everywhere.
+
+### Producer/Consumer Helpers
+
+- `createProducer(event, fn)`: Create a type-safe event producer. The payload type is inferred from the global event map.
+- `createConsumer(event, fn)`: Create a type-safe event consumer. The payload type is inferred from the global event map.
+
+### Webhook Handler
+
+- `aukWebhookHandler(req)`: Type-safe handler for `{ type, data }` events. Validates the event type and payload using the global registry.
 
 ---
 
@@ -21,7 +40,6 @@ new Auk(options?: { config?: AukConfig; logger?: AukContext["logger"]; ... })
 
 #### Methods
 
-- `.event(eventName, schema)`: Define a typed event schema.
 - `.plugins(...pluginFns)`: Register one or more plugins.
 - `.modules(...moduleFns)`: Register one or more modules.
 - `.addCleanupHandler(name, fn)`: Register a cleanup handler for shutdown.
@@ -38,7 +56,6 @@ A type-safe event bus that wraps Node's EventEmitter.
 
 #### Methods
 
-- `.event(eventName, schema)`: Register a typed event schema.
 - `.middleware(fn)`: Register event middleware.
 - `.emitSync(eventObj)`: Emit an event synchronously (no middleware).
 - `.emit(eventObj)`: Emit an event asynchronously (with middleware).
@@ -50,6 +67,8 @@ A type-safe event bus that wraps Node's EventEmitter.
 
 ## Types
 
+- `AukEvents`: The global event map interface (augmentable via module augmentation).
+- `EventPayload<E>`: Type helper to get the payload type for an event.
 - `AukPlugin` / `AukModule`: Plugin/module registration types (named or function).
 - `PluginFn` / `ModuleFn`: Plugin/module function signatures.
 - `AukContext`: Context object passed to plugins and modules (logger, config, health, etc).
@@ -73,10 +92,12 @@ import { Type, Static, TSchema } from "auk";
 
 ## Usage Notes
 
-- **Type Safety**: Use `.event()` to define event schemas for type-safe plugins and modules.
-- **Plugins**: Use for connecting to event sources (queues, cron, webhooks, etc). Emit events via the bus.
-- **Modules**: Use for business logic. Subscribe to events via the bus.
+- **Type Safety**: Use `defineEvent` and module augmentation for global, type-safe event registration.
+- **Producers/Consumers**: Use `createProducer`/`createConsumer` for ergonomic, type-safe event logic.
+- **Plugins**: Use for connecting to event sources (queues, cron, webhooks, etc). Emit events via the bus or producers.
+- **Modules**: Use for business logic. Subscribe to events via the bus or consumers.
+- **Webhook Ingestion**: Use `aukWebhookHandler` for safe, type-checked external event ingestion.
 - **Context**: Shared object for logger, config, health, and any custom fields.
 - **Graceful Shutdown**: Register cleanup handlers for resource cleanup.
 
-For more details and examples, see the [Usage Guide](../USAGE.md).
+For more details and examples, see the [Usage Guide](../examples/USAGE.md).

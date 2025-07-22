@@ -1,4 +1,4 @@
-import { NATS } from "../../addons/distributed/nats/index.js";
+import { natsMiddleware } from "../../addons/distributed/nats/index.js";
 import { Auk, Type } from "../src/index.js";
 
 // Define event schemas
@@ -15,21 +15,20 @@ const MetricsSchema = Type.Object({
 });
 
 // Create NATS broker instance
-const nats = new NATS({
+const nats = natsMiddleware({
   servers: "nats://localhost:4222", // Default NATS server
 });
 
 // Create Auk instance in distributed mode
 const app = new Auk({
   mode: "distributed",
-  broker: nats,
   config: {
     env: "development",
     serviceName: "distributed-worker",
   },
-})
-  .event("job.run", JobSchema)
-  .event("metrics.update", MetricsSchema);
+});
+
+app.middleware(nats);
 
 // Simple role configuration - change this to true for the producer instance
 const isProducer = false; // Change to true for one instance

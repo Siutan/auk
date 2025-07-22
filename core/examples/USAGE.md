@@ -1,366 +1,165 @@
 # Auk Library - Usage Instructions
 
-## 🎯 Recommended Architecture: Composition Pattern
+## 🎯 Recommended Architecture: Global Event Map Pattern (NEW)
 
-**The recommended way to build with Auk is using the composition pattern with `.use()` for better separation of concerns and modularity.**
+**Auk now uses a global, augmentable event map and schema registry for type-safe, ergonomic event-driven development.**
 
-### Why Use Composition?
+### Why Use the Global Event Map?
 
-- **Modular**: Each service/domain can be developed separately
-- **Type Safe**: Full TypeScript safety across composed modules
-- **Reusable**: Services can be reused across different applications
-- **Testable**: Each module can be tested in isolation
-- **Maintainable**: Clear separation between different domains
+- **Modular**: Each feature can define its own events and schemas
+- **Type Safe**: Full TypeScript safety across all files and packages
+- **Ergonomic**: Producers/consumers infer types automatically
+- **Composable**: No need to chain or assign .event() calls
+- **Maintainable**: Clear, central event registry and DX helpers
 
 ### Quick Example
 
 ```typescript
-import { Auk, Type } from "@huddled/auk";
+import { Auk, Type } from "auk";
+import { defineEvent, createProducer, createConsumer } from "auk/events";
 
-// Create separate domain modules
-const userService = new Auk()
-  .event(
-    "user.created",
-    Type.Object({ id: Type.String(), name: Type.String() })
-  )
-  .modules({
-    name: "user-handler",
-    fn: (bus) => {
-      bus.on("user.created", (data) => console.log(`Welcome ${data.name}!`));
-    },
-  });
+// Augment the global AukEvents interface
+import type { TSchema } from "@sinclair/typebox";
+declare module "auk/events" {
+  interface AukEvents {
+    "user.created": typeof UserCreatedSchema;
+    "order.processed": typeof OrderProcessedSchema;
+  }
+}
 
-const orderService = new Auk()
-  .event(
-    "order.placed",
-    Type.Object({ orderId: Type.String(), total: Type.Number() })
-  )
-  .modules({
-    name: "order-handler",
-    fn: (bus) => {
-      bus.on("order.placed", (data) =>
-        console.log(`Order ${data.orderId} placed!`)
-      );
-    },
-  });
-
-// Compose them together
-const app = userService.use(orderService);
-await app.start();
-```
-
-### Advanced Composition with Plugin Events
-
-```typescript
-// Plugin with its own events
-const notificationPlugin = {
-  name: "notifications",
-  events: {
-    "notification.email": Type.Object({
-      to: Type.String(),
-      subject: Type.String(),
-    }),
-    "notification.sms": Type.Object({
-      phone: Type.String(),
-      message: Type.String(),
-    }),
-  },
-  fn: async (context, bus) => {
-    bus.on("notification.email", (data) =>
-      console.log(`📧 ${data.to}: ${data.subject}`)
-    );
-  },
-};
-
-// Compose with plugin events - unified .plugins() method
-const app = userService.use(orderService).plugins(notificationPlugin); // Automatically detects and merges events
-```
-
-**See `composition-demo.ts` for a comprehensive example!**
-
-## Quick Start
-
-### 1. Test the Library
-
-```bash
-cd auk
-bun test.ts
-```
-
-This will run a simple test to verify the library is working correctly.
-
-### 2. Run the Demo
-
-```bash
-cd auk
-bun demo.ts
-```
-
-This will start the demo consumer service with multiple plugins and modules. You'll see:
-
-- Azure Service Bus simulation events
-- LTI upload processing
-- Notification handling
-- Health checks and maintenance tasks
-
-### 3. Run the LTI Consumer Service
-
-```bash
-cd consumer-service
-bun index.ts
-```
-
-This starts a production-ready LTI consumer service that demonstrates real-world usage.
-
-## Project Structure
-
-```
-auk/
-├── index.ts              # Main Auk library
-├── demo.ts               # Demo application
-├── test.ts               # Simple test
-├── USAGE.md              # This file
-├── plugins/              # Event source handlers
-│   ├── azure-service-bus.ts
-│   └── cron.ts
-└── modules/              # Business logic handlers
-    ├── lti-upload.ts
-    ├── notification.ts
-    └── maintenance.ts
-
-consumer-service/
-└── index.ts              # Production LTI consumer service
-```
-
-## Key Features Demonstrated
-
-1. **Event-Driven Architecture**: Plugins emit events, modules subscribe and process
-2. **Modular Design**: Easy to add new plugins and modules
-3. **Shared Context**: Logger, database, and config available to all components
-4. **Error Handling**: Graceful error handling with proper logging
-5. **Inter-Module Communication**: Modules can communicate via the event bus
-6. **BunJS Native**: Leverages Bun's performance and ESM support
-7. **Type Safety**: Full TypeScript support with schema-based event typing
-
-## Typed Events with TypeBox
-
-Auk supports TypeScript type safety for events using TypeBox schemas (like Elysia). This ensures plugins and modules communicate with correct data types.
-
-### Fluent Typing Pattern (IMPORTANT!)
-
-⚠️ **Always chain `.event()` calls or assign the result to get full type safety!**
-
-The `.event()` method uses a fluent typing pattern similar to Elysia, tRPC, and Zod. Each call returns a **new instance** with augmented types.
-
-```typescript
-// ✅ CORRECT: Chain .event() calls
-const app = new Auk({ config: { env: "development" } })
-  .event(
-    "user.created",
-    Type.Object({
-      id: Type.String(),
-      email: Type.String(),
-      name: Type.String(),
-    })
-  )
-  .event(
-    "user.updated",
-    Type.Object({
-      id: Type.String(),
-      email: Type.Optional(Type.String()),
-      name: Type.Optional(Type.String()),
-    })
-  );
-
-// ✅ CORRECT: Assign the result to a new variable
-const baseApp = new Auk({ config: { env: "development" } });
-const typedApp = baseApp.event(
-  "order.placed",
+// Define and register event schemas
+defineEvent(
+  "user.created",
   Type.Object({
-    orderId: Type.String(),
+    id: Type.String(),
+    name: Type.String(),
+    email: Type.String(),
+  })
+);
+defineEvent(
+  "order.processed",
+  Type.Object({
+    orderId: Type.Number(),
+    userId: Type.String(),
     amount: Type.Number(),
   })
 );
 
-// ❌ WRONG: Don't do this - you'll lose type safety!
-const wrongApp = new Auk({ config: { env: "development" } });
-wrongApp.event("some.event", Type.Object({ data: Type.String() })); // Types are lost!
-```
-
-Why this matters:
-
-- **Type Safety**: Only the returned instance has the augmented event types
-- **IntelliSense**: You get proper autocomplete and type checking
-- **Runtime Safety**: Schema validation works correctly
-- **Future-Proof**: Your code will work with future Auk versions
-
-### Basic Typed Event Usage
-
-```typescript
-import { Auk, Type } from "./src";
-
-// Define event schemas
-const UserCreatedSchema = Type.Object({
-  id: Type.String(),
-  name: Type.String(),
-  email: Type.String(),
+// Producer/consumer helpers
+const userProducer = createProducer("user.created", (payload, ctx) => {
+  ctx.logger.info("User created!", payload);
+});
+const orderConsumer = createConsumer("order.processed", (payload, ctx) => {
+  ctx.logger.info("Order processed!", payload);
 });
 
-// Create typed app
-const app = new Auk().event("user.created", UserCreatedSchema);
-
-// Plugin with type-safe emission
+const app = new Auk();
 app.plugins({
-  name: "user-plugin",
-  fn: async (context, bus) => {
-    // TypeScript enforces correct data structure
-    bus.emitSync({
-      event: "user.created",
-      data: {
+  name: "user-producer-plugin",
+  fn: (bus, context) => {
+    userProducer.run(
+      {
         id: "user123",
         name: "Alice Johnson",
         email: "alice@example.com",
       },
-    });
+      context
+    );
   },
 });
-
-// Module with type-safe listening
 app.modules({
-  name: "user-module",
+  name: "order-consumer-module",
   fn: (bus, context) => {
-    // userData is automatically typed as { id: string; name: string; email: string; }
-    bus.on("user.created", (userData) => {
-      context.logger.info(`New user: ${userData.name} (${userData.email})`);
+    bus.on("order.processed", (orderData) => {
+      orderConsumer.handle(orderData, context);
     });
   },
 });
+await app.start();
 ```
 
-### Multiple Event Types
+### Webhook Handler Example
 
 ```typescript
-const app = new Auk()
-  .event(
-    "user.created",
-    Type.Object({
-      id: Type.String(),
-      name: Type.String(),
-      email: Type.String(),
-    })
-  )
-  .event(
-    "order.processed",
-    Type.Object({
-      orderId: Type.Number(),
-      userId: Type.String(),
-      amount: Type.Number(),
-    })
-  )
-  .event(
-    "notification.sent",
-    Type.Object({
-      recipient: Type.String(),
-      message: Type.String(),
-      channel: Type.Union([Type.Literal("email"), Type.Literal("sms")]),
-    })
-  );
-```
+import { aukWebhookHandler } from "auk/events";
 
-### Fallback for Untyped Events
-
-Events without schemas default to `any` type for maximum flexibility:
-
-```typescript
-app.modules({
-  name: "analytics-module",
-  fn: (bus, context) => {
-    // data is 'any' type for unknown events
-    bus.on("unknown.event", (data) => {
-      context.logger.info("Unknown event:", data);
-    });
-  },
+// In your HTTP server:
+app.post("/webhook", async (req, res) => {
+  const result = await aukWebhookHandler(req);
+  res.status(result.status).json(result.body);
 });
 ```
 
-## Creating Your Own Plugins
+## Key Features Demonstrated
 
-### Typed Plugin
+1. **Global Event-Driven Architecture**: Events and schemas are registered globally
+2. **Type Safety**: Full TypeScript support with schema-based event typing
+3. **Ergonomic Producers/Consumers**: No manual type imports needed
+4. **Type-Safe Webhook Ingestion**: Validate and narrow inbound events
+5. **Composable and Modular**: No more .event() chaining required
+
+## Typed Events with TypeBox
+
+Auk supports TypeScript type safety for events using TypeBox schemas. Register events globally and augment the `AukEvents` interface for type inference everywhere.
+
+### Global Event Registration Pattern
 
 ```typescript
-import { AukPlugin, Type } from "./src";
+import { defineEvent } from "auk/events";
+import { Type } from "auk";
 
-// First define your event schema
-const MyEventSchema = Type.Object({
-  id: Type.String(),
-  timestamp: Type.Number(),
-  data: Type.String(),
+defineEvent(
+  "user.created",
+  Type.Object({
+    id: Type.String(),
+    name: Type.String(),
+    email: Type.String(),
+  })
+);
+```
+
+### Module Augmentation for Type Inference
+
+```typescript
+import type { TSchema } from "@sinclair/typebox";
+declare module "auk/events" {
+  interface AukEvents {
+    "user.created": typeof UserCreatedSchema;
+  }
+}
+```
+
+### Producer/Consumer Helpers
+
+```typescript
+import { createProducer, createConsumer } from "auk/events";
+
+const userProducer = createProducer("user.created", (payload, ctx) => {
+  // payload is fully typed
 });
-
-// Create typed plugin
-export const myPlugin: AukPlugin = async (context, bus) => {
-  context.logger.info("My plugin starting...");
-
-  // TypeScript will enforce the schema
-  bus.emit({
-    event: "my.event",
-    data: {
-      id: "evt123",
-      timestamp: Date.now(),
-      data: "example",
-    },
-  });
-};
+const userConsumer = createConsumer("user.created", (payload, ctx) => {
+  // payload is fully typed
+});
 ```
 
-### Untyped Plugin (Legacy)
+### Webhook Handler
 
 ```typescript
-import { AukPlugin } from "./src";
+import { aukWebhookHandler } from "auk/events";
 
-export const myPlugin: AukPlugin = async (context, bus) => {
-  context.logger.info("My plugin starting...");
-
-  // No type enforcement
-  bus.emit({ event: "my.event", data: { anything: "goes" } });
-};
+// In your HTTP server:
+app.post("/webhook", async (req, res) => {
+  const result = await aukWebhookHandler(req);
+  res.status(result.status).json(result.body);
+});
 ```
 
-## Creating Your Own Modules
+## Creating Your Own Plugins and Modules
 
-### Typed Module
-
-```typescript
-import { AukModule } from "./src";
-
-export const myModule: AukModule = (bus, context) => {
-  // data parameter is automatically typed based on event schema
-  bus.on("my.event", async (data) => {
-    // data is typed as { id: string; timestamp: number; data: string; }
-    context.logger.info(`Processing event ${data.id} at ${data.timestamp}`);
-
-    // Business logic here
-    // Can emit other typed events
-    bus.emit({
-      event: "my.processed",
-      data: { originalId: data.id, result: "success" },
-    });
-  });
-};
-```
-
-### Untyped Module (Legacy)
-
-```typescript
-import { AukModule } from "./src";
-
-export const myModule: AukModule = (bus, context) => {
-  bus.on("my.event", async (data) => {
-    // data is 'any' type
-    context.logger.info("Processing my event:", data);
-  });
-};
-```
+- Use `createProducer` for type-safe event emission
+- Use `createConsumer` for type-safe event handling
+- Register events and schemas globally with `defineEvent`
+- Augment `AukEvents` for type inference
 
 ## Environment Variables
 

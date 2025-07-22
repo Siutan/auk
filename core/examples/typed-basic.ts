@@ -1,102 +1,103 @@
 import { Auk, Type } from "../src";
+import { defineEvent, createProducer, createConsumer } from "../src/events";
 
-// Define event schemas
+// Augment the global AukEvents interface
+declare module "../src/events" {
+  interface AukEvents {
+    "user.created": typeof UserCreatedSchema.static;
+    "order.processed": typeof OrderProcessedSchema.static;
+  }
+}
+
+// Define event schemas and register them globally
 const UserCreatedSchema = Type.Object({
   id: Type.String(),
   name: Type.String(),
   email: Type.String(),
 });
+defineEvent("user.created", UserCreatedSchema);
 
 const OrderProcessedSchema = Type.Object({
   orderId: Type.Number(),
   userId: Type.String(),
   amount: Type.Number(),
 });
+defineEvent("order.processed", OrderProcessedSchema);
 
-// Create typed app with event schemas
-const app = new Auk()
-  .event("user.created", UserCreatedSchema)
-  .event("order.processed", OrderProcessedSchema);
+// For demo: define a minimal context type
+// In real usage, use your actual context type
+interface Ctx {
+  logger: any;
+}
 
+// Producer using the new helper (type-safe)
+const userProducer = createProducer<"user.created", typeof UserCreatedSchema.static, Ctx>(
+  "user.created",
+  async (payload, ctx) => {
+    ctx.logger.info("Emitting user.created", payload);
+    // payload is fully typed
+  }
+);
+
+const orderProducer = createProducer<
+  "order.processed",
+  typeof OrderProcessedSchema.static,
+  Ctx
+>("order.processed", (payload, ctx) => {
+  ctx.logger.info("Emitting order.processed", payload);
+  // payload is fully typed
+});
+
+// Consumer using the new helper (type-safe)
+const orderConsumer = createConsumer<
+  "order.processed",
+  typeof OrderProcessedSchema.static,
+  Ctx
+>("order.processed", (orderData, ctx) => {
+  ctx.logger.info(
+    `Order ${orderData.orderId} processed for user ${orderData.userId}`
+  );
+  ctx.logger.info(`Amount: $${orderData.amount.toFixed(2)}`);
+});
+
+const app = new Auk();
+
+// Simulate plugin/module registration using the new helpers
 app.plugins({
-  name: "user-plugin",
-  fn: async (context, bus) => {
-    context.logger.info("User plugin started");
-
-    // TypeScript will enforce the correct data type here
-    bus.emitSync({
-      event: "user.created",
-      data: {
+  name: "user-producer-plugin",
+  fn: (bus, context: Ctx) => {
+    userProducer.run(
+      {
         id: "user123",
         name: "Alice Johnson",
         email: "alice@example.com",
       },
-    });
-
-    // This would cause a TypeScript error:
-    // bus.emitSync({
-    //   event: "user.created",
-    //   data: { invalid: "data" }
-    // });
+      context
+    );
   },
 });
 
 app.plugins({
-  name: "order-plugin",
-  fn: async (context, bus) => {
-    context.logger.info("Order plugin started");
-
-    // TypeScript will enforce the correct data type here
-    bus.emitSync({
-      event: "order.processed",
-      data: {
+  name: "order-producer-plugin",
+  fn: (bus, context) => {
+    orderProducer.run(
+      {
         orderId: 12345,
         userId: "user123",
         amount: 99.99,
       },
-    });
+      context as Ctx
+    );
   },
 });
 
 app.modules({
-  name: "user-module",
+  name: "order-consumer-module",
   fn: (bus, context) => {
-    // TypeScript infers the correct type for userData
-    bus.on("user.created", (userData) => {
-      // userData is typed as { id: string; name: string; email: string; }
-      context.logger.info(
-        `New user created: ${userData.name} (${userData.email})`
-      );
-      context.logger.info(`User ID: ${userData.id}`);
-    });
-  },
-});
-
-app.modules({
-  name: "order-module",
-  fn: (bus, context) => {
-    // TypeScript infers the correct type for orderData
     bus.on("order.processed", (orderData) => {
-      // orderData is typed as { orderId: number; userId: string; amount: number; }
-      context.logger.info(
-        `Order ${orderData.orderId} processed for user ${orderData.userId}`
-      );
-      context.logger.info(`Amount: $${orderData.amount.toFixed(2)}`);
+      orderConsumer.handle(orderData, context as Ctx);
     });
   },
 });
 
-app.modules({
-  name: "analytics-module",
-  fn: (bus, context) => {
-    // For untyped events, fallback to 'any'
-    bus.on("unknown.event", (data) => {
-      // data is 'any' type here
-      context.logger.info("Unknown event received:", data);
-    });
-  },
-});
-
-app.start().then(() => {
-  console.log("Typed application started!");
-});
+app.start();
