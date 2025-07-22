@@ -12,6 +12,10 @@ const Events = {
   "test.event": T.Object({
     message: T.String(),
   }),
+  "test.event.processed": T.Object({
+    message: T.String(),
+    processed: T.Boolean(),
+  }),
 } as const;
 
 const auk = new Auk(Events, {
@@ -33,6 +37,7 @@ auk.plugins(
     config: {
       url: "amqp://localhost",
     },
+    events: ["test.event"],
   })
 );
 
@@ -45,7 +50,13 @@ auk.consumer("user.creation.started", (data, ctx) => {
 });
 
 auk.consumer("test.event", (data, ctx) => {
+  console.log('test.event data:', data);
   ctx.logger.info("Received test event:", data);
+  auk.umq.emit("test.event.processed", { message: (data as any).message, processed: true });
+});
+
+auk.consumer("test.event.processed", (data, ctx) => {
+  ctx.logger.info("Received processed test event:", data);
 });
 
 

@@ -1,5 +1,5 @@
 import type { PluginFn } from "../../../core/src";
-import { RabbitMQProvider } from "./rabbitmq";
+import { type RabbitMQConfig, RabbitMQProvider } from "./rabbitmq";
 
 export interface UmqProvider {
   publish(event: string, data: any): Promise<void>;
@@ -7,12 +7,27 @@ export interface UmqProvider {
   close(): Promise<void>;
 }
 
-export interface UmqPluginOptions {
-  provider: "rabbitmq" | "azure" | "kafka";
-  config: any;
+export type UmqPluginOptions = {
+  events: string[];
+} & (
+  | { provider: "rabbitmq"; config: RabbitMQConfig }
+  | { provider: "azure"; config: any }
+  | { provider: "kafka"; config: any }
+);
+
+declare module "../../../core/src/auk" {
+  interface Auk {
+    umq: {
+      emit(event: string, data: any): Promise<void>;
+    };
+  }
 }
 
-export const umqPlugin = ({ provider, config }: UmqPluginOptions): PluginFn<any> => {
+export const umqPlugin = ({
+  provider,
+  config,
+  events,
+}: UmqPluginOptions): PluginFn<any> => {
   return (auk, ctx, bus) => {
     let umqProvider: UmqProvider;
 
@@ -20,24 +35,31 @@ export const umqPlugin = ({ provider, config }: UmqPluginOptions): PluginFn<any>
       case "rabbitmq":
         umqProvider = new RabbitMQProvider(config);
         break;
-      case "azure":
-        // umqProvider = new AzureProvider(config);
-        break;
-      case "kafka":
-        // umqProvider = new KafkaProvider(config);
-        break;
+      // case "azure":
+      //   // umqProvider = new AzureProvider(config);
+      // case "kafka":
+      //   // umqProvider = new KafkaProvider(config);
       default:
         throw new Error(`Unsupported UMQ provider: ${provider}`);
     }
 
-    // At this point, the provider is initialized and ready to be used.
-    // For example, you can start listening to all events on the bus
-    // and publish them to the message queue.
-    bus.on("*", (data: any, eventName?: string) => {
-      if (typeof eventName !== 'string') return;
-      if (ctx.event?.name === eventName) return; // Avoid infinite loops
-      umqProvider.publish(eventName, data);
-    });
+    ctx.logger.info(`UMQ provider initialized: ${provider}`);
+
+    // Add the emit function to the auk instance
+    auk.umq = {
+      emit: async (event: string, data: any) => {
+        await umqProvider.publish(event, { event, payload: data });
+      },
+    };
+
+    // start listening for events from the UMQ provider
+    for (const eventName of events) {
+      umqProvider.subscribe(eventName, (data) => {
+        if (auk.events[data.event]) {
+          bus.emit({ event: data.event, data: data });
+        }
+      });
+    }
 
     // It's important to clean up resources when the plugin is unloaded.
     ctx.addCleanupHandler("umq-provider", () => {
