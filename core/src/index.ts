@@ -296,7 +296,7 @@ export interface AukConfig {
 }
 
 /**
- * Context object passed to plugins and modules.
+ * Context object passed to producers and consumers.
  */
 export interface AukContext {
   /**
@@ -341,59 +341,85 @@ export interface AukContext {
 }
 
 /**
- * Plugin function signature.
- * Plugins are typically event PRODUCERS that emit events into the system.
- * They receive the bus first for consistent type safety with modules.
- * @param bus - The Auk event bus (typed for event emission constraints).
- * @param context - The Auk context object.
- * @returns A promise or void.
+ * Type-safe emit function that constrains events to the available schemas.
  */
-export type PluginFn<S extends EventSchemas = {}> = (
-  bus: AukBus<S>,
-  context: AukContext
-) => Promise<void> | void;
-
-/**
- * Module function signature.
- * Modules are typically event CONSUMERS that listen to events in the system.
- * They receive the bus first to emphasize their role as event listeners.
- * @param bus - The Auk event bus.
- * @param context - The Auk context object.
- */
-export type ModuleFn<S extends EventSchemas = {}> = (
-  bus: AukBus<S>,
-  context: AukContext
+export type TypedEmitFn<EventSchemas extends Record<string, TSchema>> = <
+  E extends keyof EventSchemas
+>(
+  event: E,
+  payload: Static<EventSchemas[E]>
 ) => void;
 
 /**
- * Named plugin object.
+ * Producer handler function that receives payload, context, and emit function.
+ * @template Schema - The TypeBox schema for the event data
+ * @template Context - The context type (extends AukContext)
+ * @template EventSchemas - All available event schemas for type-safe emit
  */
-export interface NamedPlugin<S extends EventSchemas = {}> {
-  /**
-   * Name of the plugin.
-   */
-  name: string;
-  /**
-   * Plugin function.
-   */
-  fn: PluginFn<S>;
-  /**
-   * Delivery mode for distributed events (only applies in distributed mode).
-   */
-  delivery?: Delivery;
-}
+export type ProducerHandler<
+  Schema extends TSchema,
+  Context extends AukContext = AukContext,
+  EventSchemas extends Record<string, TSchema> = {}
+> = (args: {
+  payload: Static<Schema>;
+  ctx?: Context;
+  emit?: TypedEmitFn<EventSchemas>;
+}) => void | Promise<void>;
+
+type RequiredProducerHandler<
+  Schema extends TSchema,
+  Context extends AukContext = AukContext,
+  EventSchemas extends Record<string, TSchema> = {}
+> = (args: {
+  payload: Static<Schema>;
+  ctx: Context;
+  emit: TypedEmitFn<EventSchemas>;
+}) => void | Promise<void>;
+
 /**
- * Named module object.
+ * Producer function signature.
+ * Producers are event generators that emit events into the system.
+ * @template EventName - The event name
+ * @template EventSchemas - All available event schemas
+ * @template Context - The context type
  */
-export interface NamedModule<S extends EventSchemas = {}> {
+export type ProducerFn<
+  EventName extends keyof EventSchemas,
+  EventSchemas extends Record<string, TSchema>,
+  Context extends AukContext = AukContext
+> = <E extends EventName>(
+  event: E,
+  opts: {
+    handler: ProducerHandler<EventSchemas[E], Context, EventSchemas>;
+  }
+) => void | Promise<void>;
+
+/**
+ * Consumer function signature.
+ * Consumers are event listeners that process events in the system.
+ * @template Schema - The TypeBox schema for the event data
+ * @template Context - The context type
+ */
+export type ConsumerFn<
+  Schema extends TSchema,
+  Context extends AukContext = AukContext
+> = (data: Static<Schema>, context: Context) => void | Promise<void>;
+
+/**
+ * Named producer object.
+ */
+export interface NamedProducer<
+  EventSchemas extends Record<string, TSchema>,
+  Context extends AukContext = AukContext
+> {
   /**
-   * Name of the module.
+   * Name of the producer.
    */
   name: string;
   /**
-   * Module function.
+   * Producer function.
    */
-  fn: ModuleFn<S>;
+  fn: ProducerFn<keyof EventSchemas, EventSchemas, Context>;
   /**
    * Delivery mode for distributed events (only applies in distributed mode).
    */
@@ -401,78 +427,69 @@ export interface NamedModule<S extends EventSchemas = {}> {
 }
 
 /**
- * Plugin with events that can define its own event schemas.
+ * Named consumer object.
  */
-export interface PluginWithEvents<
+export interface NamedConsumer<
+  Schema extends TSchema,
+  Context extends AukContext = AukContext
+> {
+  /**
+   * Name of the consumer.
+   */
+  name: string;
+  /**
+   * Consumer function.
+   */
+  fn: ConsumerFn<Schema, Context>;
+  /**
+   * Delivery mode for distributed events (only applies in distributed mode).
+   */
+  delivery?: Delivery;
+}
+
+/**
+ * Type for producer registration.
+ */
+export type AukProducer<
+  EventSchemas extends Record<string, TSchema>,
+  Context extends AukContext = AukContext
+> =
+  | NamedProducer<EventSchemas, Context>
+  | (ProducerFn<keyof EventSchemas, EventSchemas, Context> & { name?: string });
+
+/**
+ * Type for consumer registration.
+ */
+export type AukConsumer<
+  Schema extends TSchema,
+  Context extends AukContext = AukContext
+> =
+  | NamedConsumer<Schema, Context>
+  | (ConsumerFn<Schema, Context> & { name?: string });
+
+/**
+ * Producer with events that can define its own event schemas.
+ */
+export interface ProducerWithEvents<
   S extends EventSchemas,
   E extends EventSchemas
 > {
   /**
-   * Name of the plugin.
+   * Name of the producer.
    */
   name: string;
   /**
-   * Event schemas that this plugin defines.
+   * Event schemas that this producer defines.
    */
   events: E;
   /**
-   * Plugin function that receives a bus with merged event schemas.
+   * Producer function that receives a bus with merged event schemas.
    */
-  fn: PluginFn<MergeEventSchemas<S, E>>;
+  fn: ProducerFn<keyof MergeEventSchemas<S, E>, MergeEventSchemas<S, E>>;
   /**
    * Delivery mode for distributed events (only applies in distributed mode).
    */
   delivery?: Delivery;
-}
-
-/**
- * Type for plugin registration (named or function with optional name).
- */
-export type AukPlugin<S extends EventSchemas = {}> =
-  | NamedPlugin<S>
-  | (PluginFn<S> & { name?: string });
-/**
- * Type for module registration (named or function with optional name).
- */
-export type AukModule<S extends EventSchemas = {}> =
-  | NamedModule<S>
-  | (ModuleFn<S> & { name?: string });
-
-// Helpful type aliases that make the distinction clearer
-/**
- * Alias for AukModule - emphasizes the role as event consumers/listeners.
- * Use this type when you want to be explicit about the module's purpose.
- */
-export type EventConsumer<S extends EventSchemas = {}> = AukModule<S>;
-
-/**
- * Alias for AukPlugin - emphasizes the role as event producers/emitters.
- * Use this type when you want to be explicit about the plugin's purpose.
- */
-export type EventProducer<S extends EventSchemas = {}> = AukPlugin<S>;
-
-/**
- * Helper function to create properly typed plugins.
- * This ensures the plugin function receives correctly typed bus and context parameters.
- */
-export function plugin<S extends EventSchemas = {}>(config: {
-  name: string;
-  fn: PluginFn<S>;
-  delivery?: Delivery;
-}): NamedPlugin<S> {
-  return config;
-}
-
-/**
- * Helper function to create properly typed modules.
- * This ensures the module function receives correctly typed bus and context parameters.
- */
-export function module<S extends EventSchemas = {}>(config: {
-  name: string;
-  fn: ModuleFn<S>;
-  delivery?: Delivery;
-}): NamedModule<S> {
-  return config;
 }
 
 /**
@@ -1054,7 +1071,9 @@ export function getAukConfig(): Required<AukConfig> {
  * @param plugin - The plugin object or function.
  * @returns The plugin name.
  */
-function getPluginName<S extends EventSchemas>(plugin: AukPlugin<S>): string {
+function getPluginName<S extends Record<string, TSchema>>(
+  plugin: AukProducer<S>
+): string {
   if (typeof plugin === "function") return plugin.name || "anonymous-plugin";
   return plugin.name;
 }
@@ -1063,7 +1082,9 @@ function getPluginName<S extends EventSchemas>(plugin: AukPlugin<S>): string {
  * @param mod - The module object or function.
  * @returns The module name.
  */
-function getModuleName<S extends EventSchemas>(mod: AukModule<S>): string {
+function getModuleName<S extends Record<string, TSchema>>(
+  mod: AukConsumer<TSchema>
+): string {
   if (typeof mod === "function") return mod.name || "anonymous-module";
   return mod.name;
 }
@@ -1072,9 +1093,9 @@ function getModuleName<S extends EventSchemas>(mod: AukModule<S>): string {
  * @param plugin - The plugin object or function.
  * @returns The plugin function.
  */
-function getPluginFn<S extends EventSchemas>(
-  plugin: AukPlugin<S>
-): PluginFn<S> {
+function getPluginFn<S extends Record<string, TSchema>>(
+  plugin: AukProducer<S>
+): ProducerFn<keyof S, S, AukContext> {
   return typeof plugin === "function" ? plugin : plugin.fn;
 }
 /**
@@ -1082,7 +1103,9 @@ function getPluginFn<S extends EventSchemas>(
  * @param mod - The module object or function.
  * @returns The module function.
  */
-function getModuleFn<S extends EventSchemas>(mod: AukModule<S>): ModuleFn<S> {
+function getModuleFn<S extends TSchema>(
+  mod: AukConsumer<S>
+): ConsumerFn<S, AukContext> {
   return typeof mod === "function" ? mod : mod.fn;
 }
 
@@ -1109,63 +1132,95 @@ function prefixLogger(
 }
 
 /**
- * Main Auk class for service setup, plugin/module registration, and startup.
+ * Main Auk class for service setup, producer/consumer registration, and startup.
  *
- * @example Fluent Typing Pattern (IMPORTANT!)
+ * @example Type-safe Event Schema Pattern
  * ```typescript
- * // ✅ CORRECT: Always chain .event() calls or assign the result
- * const app = new Auk({ config: { env: "development" } })
- *   .event("user.created", Type.Object({ id: Type.String() }))
- *   .event("user.updated", Type.Object({ id: Type.String() }));
+ * // Define your event schemas
+ * const Events = {
+ *   "user.created": Type.Object({ id: Type.String(), email: Type.String() }),
+ *   "order.placed": Type.Object({ orderId: Type.Number(), userId: Type.String() })
+ * } as const;
  *
- * // ✅ CORRECT: Assign to a new variable
- * const baseApp = new Auk({ config: { env: "development" } });
- * const typedApp = baseApp.event("order.placed", Type.Object({ id: Type.String() }));
+ * // Create Auk instance with events
+ * const auk = new Auk(Events, { config: { env: "development" } });
  *
- * // ❌ WRONG: Don't mutate without assignment - types are lost!
- * const wrongApp = new Auk({ config: { env: "development" } });
- * wrongApp.event("some.event", Type.Object({ data: Type.String() })); // Types lost!
+ * // Register consumers with full type safety
+ * auk.consumer("user.created", (user, ctx) => {
+ *   // user is typed as { id: string, email: string }
+ *   ctx.logger.info("User created:", user.id);
+ * });
  * ```
  */
-export class Auk<S extends EventSchemas = {}> {
+export class Auk<
+  EventSchemas extends Record<string, TSchema> = {},
+  Context extends AukContext = AukContext,
+  Producers extends Record<string, any> = {}
+> {
   /**
    * The Auk context object.
    */
-  public context: AukContext;
+  public context: Context;
   /**
    * The Auk event bus instance.
    */
-  public eventBus: AukBus<S>;
-  private _plugins: {
+  public eventBus: AukBus<EventSchemas>;
+  /**
+   * The event schemas for this Auk instance.
+   */
+  public events: EventSchemas;
+
+  private _producers: {
     name: string;
-    fn: PluginFn<S>;
+    fn: ProducerFn<keyof EventSchemas, EventSchemas, Context>;
     delivery?: Delivery;
   }[] = [];
-  private _modules: {
+  private _consumers: {
     name: string;
-    fn: ModuleFn<S>;
+    eventName: string;
+    fn: ConsumerFn<TSchema, Context>;
     delivery?: Delivery;
   }[] = [];
+  private _registeredProducers: Map<
+    string,
+    ProducerFn<keyof EventSchemas, EventSchemas, Context>
+  > = new Map();
   private _cleanupHandlers: { name: string; fn: CleanupFn }[] = [];
   private _isShuttingDown = false;
   private _shutdownResolver?: () => void;
   private _mode: AukMode;
   private _broker?: Broker;
+  // Add missing properties that are referenced in methods
+  private _plugins: {
+    name: string;
+    fn: ProducerFn<keyof EventSchemas, EventSchemas, AukContext>;
+    delivery?: Delivery;
+  }[] = [];
+  private _modules: {
+    name: string;
+    fn: ConsumerFn<TSchema, AukContext>;
+    delivery?: Delivery;
+  }[] = [];
 
   /**
    * Create a new Auk instance.
+   * @param events - The event schemas object
    * @param options - The Auk setup options.
    */
-  constructor(options?: {
-    config?: AukConfig;
-    logger?: AukContext["logger"];
-    mode?: AukMode;
-    broker?: Broker;
-    [key: string]: unknown;
-  }) {
+  constructor(
+    events: EventSchemas,
+    options?: {
+      config?: AukConfig;
+      logger?: AukContext["logger"];
+      mode?: AukMode;
+      broker?: Broker;
+      [key: string]: unknown;
+    }
+  ) {
     const { config, logger, mode, broker, ...rest } = options ?? {};
 
-    // Store mode and broker
+    // Store events and mode/broker
+    this.events = events;
     this._mode = mode ?? "local";
     this._broker = broker;
 
@@ -1193,7 +1248,7 @@ export class Auk<S extends EventSchemas = {}> {
       logger ?? defaultLogger,
       fullConfig.serviceName
     );
-    this.context = {
+    const baseContext: AukContext = {
       config: fullConfig,
       logger: serviceLogger,
       health: { status: "healthy", checks: {} },
@@ -1215,8 +1270,9 @@ export class Auk<S extends EventSchemas = {}> {
       },
       ...rest,
     };
+    this.context = baseContext as Context;
     _globalAukConfig = fullConfig;
-    this.eventBus = new AukBus<S>(
+    this.eventBus = new AukBus<EventSchemas>(
       undefined,
       fullConfig.maxEventListeners,
       this._mode,
@@ -1225,6 +1281,105 @@ export class Auk<S extends EventSchemas = {}> {
     );
 
     // Global state removed - middleware now uses explicit context passing
+  }
+
+  /**
+   * Register a consumer for a specific event.
+   * @param eventName - The event name to listen for
+   * @param handler - The consumer function
+   * @param opts - Optional delivery configuration
+   * @returns The Auk instance (for chaining)
+   */
+  consumer<EventName extends keyof EventSchemas>(
+    eventName: EventName,
+    handler: ConsumerFn<EventSchemas[EventName], Context>,
+    opts?: { delivery?: Delivery; name?: string }
+  ): this {
+    const name = opts?.name ?? `consumer-${String(eventName)}-${Date.now()}`;
+
+    this._consumers.push({
+      name,
+      eventName: String(eventName),
+      fn: handler as ConsumerFn<TSchema, Context>,
+      delivery: opts?.delivery,
+    });
+
+    // Register the consumer with the event bus
+    this.eventBus.on(String(eventName), (data: any) => {
+      const contextWithLogger = this.createContextWithLogger(name);
+      handler(data, contextWithLogger as Context);
+    });
+
+    return this;
+  }
+
+  /**
+   * Register a producer that can be called via asMethods().
+   * @param producerName - The name of the producer
+   * @param producerFn - The producer function
+   * @returns The Auk instance (for chaining)
+   */
+  registerProducer<ProducerName extends string>(
+    producerName: ProducerName,
+    producerFn: ProducerFn<keyof EventSchemas, EventSchemas, Context>
+  ): Auk<
+    EventSchemas,
+    Context,
+    Producers & Record<ProducerName, typeof producerFn>
+  > {
+    this._registeredProducers.set(producerName, producerFn);
+    return this as any;
+  }
+
+  /**
+   * Get an object with methods for each registered producer.
+   * @returns Object with producer methods
+   */
+  asMethods(): Producers {
+    const methods: any = {};
+
+    for (const [
+      producerName,
+      producerFn,
+    ] of this._registeredProducers.entries()) {
+      methods[producerName] = <EventName extends keyof EventSchemas>(
+        eventName: EventName,
+        opts: {
+          handler: RequiredProducerHandler<
+            EventSchemas[EventName],
+            Context,
+            EventSchemas
+          >;
+        }
+      ) => {
+        // Create a fully typed emit function that knows about all event schemas
+        const typedEmitFn: TypedEmitFn<EventSchemas> = <
+          E extends keyof EventSchemas
+        >(
+          event: E,
+          payload: Static<EventSchemas[E]>
+        ) => {
+          this.eventBus.emit({ event: String(event), data: payload });
+        };
+
+        return producerFn(eventName, {
+          handler: (args) =>
+            (
+              opts.handler as RequiredProducerHandler<
+                EventSchemas[EventName],
+                Context,
+                EventSchemas
+              >
+            )({
+              payload: args.payload,
+              ctx: this.context, // Always provide Auk's context
+              emit: typedEmitFn, // Always provide the emit function
+            }),
+        });
+      };
+    }
+
+    return methods as Producers;
   }
 
   /**
@@ -1322,16 +1477,6 @@ export class Auk<S extends EventSchemas = {}> {
     ) => void | Promise<void>
   ): this {
     return this.hooks({ onDLQ: handler });
-  }
-
-  /**
-   * Create a bus instance with hooks exposed for plugins and modules.
-   * This allows plugins and modules to register their own lifecycle hooks.
-   * @param name - The name of the plugin or module.
-   * @returns A new AukBus instance with hooks exposed.
-   */
-  private createBusWithHooks(name: string): AukBus<S> {
-    return this.eventBus.createCopyWithHooks();
   }
 
   /**
@@ -1484,18 +1629,21 @@ export class Auk<S extends EventSchemas = {}> {
    * });
    * ```
    */
-  plugins<E extends EventSchemas>(
-    ...pluginFns: (AukPlugin<S> | PluginWithEvents<S, E>)[]
-  ): Auk<MergeEventSchemas<S, E>> | this {
+  plugins<E extends Record<string, TSchema>>(
+    ...pluginFns: (
+      | AukProducer<EventSchemas>
+      | ProducerWithEvents<EventSchemas, E>
+    )[]
+  ): Auk<MergeEventSchemas<EventSchemas, E>, Context, Producers> | this {
     // Separate regular plugins from plugins with events
-    const regularPlugins: AukPlugin<S>[] = [];
-    const pluginsWithEvents: PluginWithEvents<S, E>[] = [];
+    const regularPlugins: AukProducer<EventSchemas>[] = [];
+    const pluginsWithEvents: ProducerWithEvents<EventSchemas, E>[] = [];
 
     for (const plugin of pluginFns) {
       if ("events" in plugin && typeof plugin === "object" && plugin.events) {
-        pluginsWithEvents.push(plugin as PluginWithEvents<S, E>);
+        pluginsWithEvents.push(plugin as ProducerWithEvents<EventSchemas, E>);
       } else {
-        regularPlugins.push(plugin as AukPlugin<S>);
+        regularPlugins.push(plugin as AukProducer<EventSchemas>);
       }
     }
 
@@ -1514,10 +1662,14 @@ export class Auk<S extends EventSchemas = {}> {
       const delivery =
         typeof plugin === "function" ? undefined : (plugin as any).delivery;
       // Explicitly type the function to preserve generic type information
-      const pluginFn: PluginFn<S> = getPluginFn(plugin);
+      const pluginFn = getPluginFn(plugin);
       this._plugins.push({
         name,
-        fn: pluginFn,
+        fn: pluginFn as ProducerFn<
+          keyof EventSchemas,
+          EventSchemas,
+          AukContext
+        >,
         delivery,
       });
     }
@@ -1527,7 +1679,15 @@ export class Auk<S extends EventSchemas = {}> {
       const pluginWithEvents = pluginsWithEvents[0]!; // Safe because we checked length === 1
 
       // Create a new Auk instance with merged event schemas
-      const newAuk = new Auk<MergeEventSchemas<S, E>>({
+      const mergedEvents = {
+        ...this.events,
+        ...pluginWithEvents.events,
+      } as MergeEventSchemas<EventSchemas, E>;
+      const newAuk = new Auk<
+        MergeEventSchemas<EventSchemas, E>,
+        Context,
+        Producers
+      >(mergedEvents, {
         config: this.context.config,
         logger: this.context.logger,
         mode: this._mode,
@@ -1558,14 +1718,18 @@ export class Auk<S extends EventSchemas = {}> {
       newAuk.eventBus = newBus;
 
       // Copy all existing state to the new instance (including regular plugins we just added)
-      newAuk._plugins = [...this._plugins] as Array<{
+      newAuk._plugins = [...this._plugins] as unknown as Array<{
         name: string;
-        fn: PluginFn<MergeEventSchemas<S, E>>;
+        fn: ProducerFn<
+          keyof MergeEventSchemas<EventSchemas, E>,
+          MergeEventSchemas<EventSchemas, E>,
+          AukContext
+        >;
         delivery?: Delivery;
       }>;
       newAuk._modules = [...this._modules] as Array<{
         name: string;
-        fn: ModuleFn<MergeEventSchemas<S, E>>;
+        fn: ConsumerFn<TSchema, AukContext>;
         delivery?: Delivery;
       }>;
       newAuk._cleanupHandlers = [...this._cleanupHandlers];
@@ -1577,11 +1741,15 @@ export class Auk<S extends EventSchemas = {}> {
       // Register the plugin with events itself
       newAuk._plugins.push({
         name: pluginWithEvents.name,
-        fn: pluginWithEvents.fn,
+        fn: pluginWithEvents.fn as ProducerFn<
+          keyof MergeEventSchemas<EventSchemas, E>,
+          MergeEventSchemas<EventSchemas, E>,
+          AukContext
+        >,
         delivery: pluginWithEvents.delivery,
       });
 
-      return newAuk as Auk<MergeEventSchemas<S, E>>;
+      return newAuk;
     }
 
     // No plugins with events, return current instance
@@ -1616,7 +1784,7 @@ export class Auk<S extends EventSchemas = {}> {
    * });
    * ```
    */
-  modules(...moduleFns: AukModule<S>[]) {
+  modules(...moduleFns: AukConsumer<TSchema>[]) {
     for (const mod of moduleFns) {
       const name = getModuleName(mod);
       if (!name) throw new Error("All modules must have a name");
@@ -1655,48 +1823,38 @@ export class Auk<S extends EventSchemas = {}> {
   }
 
   /**
-   * Load modules and plugins (shared logic between start() and startNonBlocking()).
-   * @returns A promise that resolves when all modules and plugins are loaded
+   * Load consumers and producers (shared logic between start() and startNonBlocking()).
+   * @returns A promise that resolves when all consumers and producers are loaded
    */
-  private async loadModulesAndPlugins(): Promise<void> {
-    // Register modules (listeners) first
-    for (const { name, fn } of this._modules) {
+  private async loadConsumersAndProducers(): Promise<void> {
+    // Consumers are already registered via .consumer() method
+    this.context.logger.info(
+      `[Auk] Loaded ${this._consumers.length} consumers`
+    );
+
+    // Run any initialization for producers
+    for (const { name, fn } of this._producers) {
       const contextWithLogger = this.createContextWithLogger(name);
-
-      // Create a bus with hooks exposed for the module
-      const moduleBus = this.createBusWithHooks(name);
-      fn(moduleBus, contextWithLogger);
-      this.context.logger.info(`[Auk] Module loaded: ${name}`);
-    }
-
-    // Then run plugins (emitters)
-    for (const { name, fn } of this._plugins) {
-      const contextWithLogger = this.createContextWithLogger(name);
-
-      // Create a bus with hooks exposed for the plugin
-      const pluginBus = this.createBusWithHooks(name);
       try {
-        // Explicitly type the function call to preserve type information
-        await (fn as PluginFn<S>)(pluginBus, contextWithLogger);
-        this.context.logger.info(`[Auk] Plugin loaded: ${name}`);
+        // Producers are initialized via registerProducer, just log
+        this.context.logger.info(`[Auk] Producer loaded: ${name}`);
       } catch (error) {
         this.context.logger.error(
-          `[Auk] Failed to load plugin '${name}':`,
+          `[Auk] Failed to load producer '${name}':`,
           error
         );
-        // Continue loading other plugins
       }
     }
   }
 
   /**
-   * Start the Auk service, loading modules and plugins.
+   * Start the Auk service, loading consumers and producers.
    * This method will block and keep the process alive until a shutdown signal is received.
    * For tests, use startNonBlocking() instead.
    * @returns A promise that resolves when shutdown is complete.
    */
   async start() {
-    await this.loadModulesAndPlugins();
+    await this.loadConsumersAndProducers();
 
     this.context.logger.info(
       `[Auk] Service '${this.context.config.serviceName}' started!`
@@ -1746,11 +1904,11 @@ export class Auk<S extends EventSchemas = {}> {
 
   /**
    * Start the Auk service without blocking (for tests).
-   * This loads modules and plugins but doesn't set up signal handlers or keep the process alive.
+   * This loads consumers and producers but doesn't set up signal handlers or keep the process alive.
    * @returns A promise that resolves when startup is complete.
    */
   async startNonBlocking(): Promise<void> {
-    await this.loadModulesAndPlugins();
+    await this.loadConsumersAndProducers();
 
     this.context.logger.info(
       `[Auk] Service '${this.context.config.serviceName}' started in non-blocking mode!`
@@ -1760,44 +1918,53 @@ export class Auk<S extends EventSchemas = {}> {
 
 /**
  * Extract event schemas from an Auk instance type.
- * This allows for referencing event schemas in plugin definitions.
+ * This allows for referencing event schemas in producer definitions.
  */
-export type EventSchemasOf<T> = T extends Auk<infer S> ? S : never;
+export type EventSchemasOf<T> = T extends Auk<infer S, any, any> ? S : never;
+
+// Legacy type aliases for backward compatibility (to be deprecated)
+/**
+ * @deprecated Use ProducerFn instead. This will be removed in a future version.
+ */
+export type PluginFn<S extends Record<string, TSchema> = {}> = (
+  bus: AukBus<S>,
+  context: AukContext
+) => Promise<void> | void;
 
 /**
- * Named plugin object with proper typing for event schemas.
+ * @deprecated Use ConsumerFn instead. This will be removed in a future version.
  */
-export interface Plugin<S extends EventSchemas = {}> {
-  /**
-   * Name of the plugin.
-   */
+export type ModuleFn<S extends Record<string, TSchema> = {}> = (
+  bus: AukBus<S>,
+  context: AukContext
+) => void;
+
+/**
+ * Helper function to create properly typed producers.
+ */
+export function producer<
+  EventSchemas extends Record<string, TSchema>,
+  Context extends AukContext = AukContext
+>(config: {
   name: string;
-  /**
-   * Plugin function with properly typed context and bus.
-   */
-  fn: PluginFn<S>;
-  /**
-   * Delivery mode for distributed events (only applies in distributed mode).
-   */
+  fn: ProducerFn<keyof EventSchemas, EventSchemas, Context>;
   delivery?: Delivery;
+}): NamedProducer<EventSchemas, Context> {
+  return config;
 }
 
 /**
- * Named module object with proper typing for event schemas.
+ * Helper function to create properly typed consumers.
  */
-export interface Module<S extends EventSchemas = {}> {
-  /**
-   * Name of the module.
-   */
+export function consumer<
+  Schema extends TSchema,
+  Context extends AukContext = AukContext
+>(config: {
   name: string;
-  /**
-   * Module function with properly typed bus and context.
-   */
-  fn: ModuleFn<S>;
-  /**
-   * Delivery mode for distributed events (only applies in distributed mode).
-   */
+  fn: ConsumerFn<Schema, Context>;
   delivery?: Delivery;
+}): NamedConsumer<Schema, Context> {
+  return config;
 }
 
 export * from "./events.js";

@@ -31,13 +31,14 @@ interface Ctx {
 }
 
 // Producer using the new helper (type-safe)
-const userProducer = createProducer<"user.created", typeof UserCreatedSchema.static, Ctx>(
+const userProducer = createProducer<
   "user.created",
-  async (payload, ctx) => {
-    ctx.logger.info("Emitting user.created", payload);
-    // payload is fully typed
-  }
-);
+  typeof UserCreatedSchema.static,
+  Ctx
+>("user.created", async (payload, ctx) => {
+  ctx.logger.info("Emitting user.created", payload);
+  // payload is fully typed
+});
 
 const orderProducer = createProducer<
   "order.processed",
