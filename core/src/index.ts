@@ -227,19 +227,29 @@ export interface AukEvent<T = unknown> {
 export type MiddlewareFn = (event: AukEvent) => AukEvent | Promise<AukEvent>;
 
 /**
+ * Middleware context for advanced middleware functions.
+ */
+export interface MiddlewareContext {
+  metadata: MessageMetadata;
+  hooks: LifecycleHooks;
+  delivery?: Delivery;
+  isDistributed: boolean;
+  state: Record<string, any>;
+  set: (key: string, value: any) => void;
+  get: (key: string) => any;
+  /**
+   * Register a cleanup handler that will be called during shutdown.
+   * This provides a way for middleware to register cleanup without global state.
+   */
+  addCleanupHandler: (name: string, fn: CleanupFn) => void;
+}
+
+/**
  * Advanced middleware function with context and next capability.
  */
 export type AdvancedMiddlewareFn = (
   event: AukEvent,
-  context: {
-    metadata: MessageMetadata;
-    hooks: LifecycleHooks;
-    delivery?: Delivery;
-    isDistributed: boolean;
-    state: Record<string, any>;
-    set: (key: string, value: any) => void;
-    get: (key: string) => any;
-  },
+  context: MiddlewareContext,
   next: () => Promise<AukEvent>
 ) => Promise<AukEvent>;
 
@@ -332,17 +342,21 @@ export interface AukContext {
 
 /**
  * Plugin function signature.
+ * Plugins are typically event PRODUCERS that emit events into the system.
+ * They receive the bus first for consistent type safety with modules.
+ * @param bus - The Auk event bus (typed for event emission constraints).
  * @param context - The Auk context object.
- * @param bus - The Auk event bus.
  * @returns A promise or void.
  */
 export type PluginFn<S extends EventSchemas = {}> = (
-  context: AukContext,
-  bus: AukBus<S>
+  bus: AukBus<S>,
+  context: AukContext
 ) => Promise<void> | void;
 
 /**
  * Module function signature.
+ * Modules are typically event CONSUMERS that listen to events in the system.
+ * They receive the bus first to emphasize their role as event listeners.
  * @param bus - The Auk event bus.
  * @param context - The Auk context object.
  */
@@ -404,7 +418,7 @@ export interface PluginWithEvents<
   /**
    * Plugin function that receives a bus with merged event schemas.
    */
-  fn: PluginFn<S & E>;
+  fn: PluginFn<MergeEventSchemas<S, E>>;
   /**
    * Delivery mode for distributed events (only applies in distributed mode).
    */
@@ -423,6 +437,43 @@ export type AukPlugin<S extends EventSchemas = {}> =
 export type AukModule<S extends EventSchemas = {}> =
   | NamedModule<S>
   | (ModuleFn<S> & { name?: string });
+
+// Helpful type aliases that make the distinction clearer
+/**
+ * Alias for AukModule - emphasizes the role as event consumers/listeners.
+ * Use this type when you want to be explicit about the module's purpose.
+ */
+export type EventConsumer<S extends EventSchemas = {}> = AukModule<S>;
+
+/**
+ * Alias for AukPlugin - emphasizes the role as event producers/emitters.
+ * Use this type when you want to be explicit about the plugin's purpose.
+ */
+export type EventProducer<S extends EventSchemas = {}> = AukPlugin<S>;
+
+/**
+ * Helper function to create properly typed plugins.
+ * This ensures the plugin function receives correctly typed bus and context parameters.
+ */
+export function plugin<S extends EventSchemas = {}>(config: {
+  name: string;
+  fn: PluginFn<S>;
+  delivery?: Delivery;
+}): NamedPlugin<S> {
+  return config;
+}
+
+/**
+ * Helper function to create properly typed modules.
+ * This ensures the module function receives correctly typed bus and context parameters.
+ */
+export function module<S extends EventSchemas = {}>(config: {
+  name: string;
+  fn: ModuleFn<S>;
+  delivery?: Delivery;
+}): NamedModule<S> {
+  return config;
+}
 
 /**
  * AukBus wraps EventEmitter to enforce event shape and provide type safety.
@@ -443,6 +494,7 @@ export class AukBus<S extends EventSchemas = {}> {
   protected mode: AukMode;
   protected broker?: Broker;
   protected lifecycleHooks: LifecycleHooks = {};
+  protected cleanupHandlerRegistrar?: (name: string, fn: CleanupFn) => void;
 
   /**
    * Create a new AukBus instance.
@@ -450,17 +502,20 @@ export class AukBus<S extends EventSchemas = {}> {
    * @param maxListeners - Maximum number of event listeners (0 = unlimited)
    * @param mode - Operating mode (local or distributed)
    * @param broker - Broker instance for distributed mode
+   * @param cleanupHandlerRegistrar - Function to register cleanup handlers
    */
   constructor(
     emitter?: NodeEventEmitter,
     maxListeners = 0,
     mode: AukMode = "local",
-    broker?: Broker
+    broker?: Broker,
+    cleanupHandlerRegistrar?: (name: string, fn: CleanupFn) => void
   ) {
     this.emitter = emitter || new NodeEventEmitter();
     this.emitter.setMaxListeners(maxListeners); // Allow unlimited listeners by default, or use config
     this.mode = mode;
     this.broker = broker;
+    this.cleanupHandlerRegistrar = cleanupHandlerRegistrar;
   }
 
   /**
@@ -509,7 +564,8 @@ export class AukBus<S extends EventSchemas = {}> {
       this.emitter, // Share the same emitter for event continuity
       this.emitter.getMaxListeners(), // Preserve current maxListeners setting
       this.mode,
-      this.broker
+      this.broker,
+      this.cleanupHandlerRegistrar
     );
 
     // Copy all existing state to the new instance
@@ -611,7 +667,7 @@ export class AukBus<S extends EventSchemas = {}> {
 
       // Enhanced context with state management
       const middlewareState = new Map<string, any>();
-      const context = {
+      const context: MiddlewareContext = {
         metadata,
         hooks: this.lifecycleHooks,
         delivery,
@@ -622,6 +678,15 @@ export class AukBus<S extends EventSchemas = {}> {
         },
         get: (key: string) => {
           return middlewareState.get(key);
+        },
+        addCleanupHandler: (name: string, fn: CleanupFn) => {
+          if (this.cleanupHandlerRegistrar) {
+            this.cleanupHandlerRegistrar(name, fn);
+          } else {
+            console.warn(
+              "[AukBus] No cleanup handler registrar available for middleware cleanup"
+            );
+          }
         },
       };
 
@@ -814,6 +879,7 @@ export class AukBus<S extends EventSchemas = {}> {
   on(
     event: string,
     listener: (data: any) => void,
+    // biome-ignore lint/correctness/noUnusedFunctionParameters: opts is accepted for API compatibility and future use, but is currently unused because distributed delivery is handled by middleware, not here.
     opts: { delivery?: Delivery } = {}
   ): this {
     // Register event listeners locally - middleware will handle distributed aspects
@@ -888,7 +954,8 @@ export class AukBus<S extends EventSchemas = {}> {
       this.emitter,
       0, // maxListeners will be set by the parent
       this.mode,
-      this.broker
+      this.broker,
+      this.cleanupHandlerRegistrar
     );
 
     // Copy over any existing event schemas
@@ -967,6 +1034,7 @@ export class AukBus<S extends EventSchemas = {}> {
    */
   removeAllListeners(): void {
     this.emitter.removeAllListeners();
+    this.wildcardListeners = []; // Also clear wildcard listeners
   }
 }
 
@@ -1152,14 +1220,11 @@ export class Auk<S extends EventSchemas = {}> {
       undefined,
       fullConfig.maxEventListeners,
       this._mode,
-      this._broker
+      this._broker,
+      (name: string, fn: CleanupFn) => this.addCleanupHandler(name, fn)
     );
 
-    // Store global reference for middleware access
-    (global as any).__aukInstance = this;
-
-    // Setup graceful shutdown handlers
-    this.setupShutdownHandlers();
+    // Global state removed - middleware now uses explicit context passing
   }
 
   /**
@@ -1199,8 +1264,16 @@ export class Auk<S extends EventSchemas = {}> {
 
     // Copy all existing state to the new instance
     // Safe to cast since the new registry extends the old one
-    newAuk._plugins = [...this._plugins] as any;
-    newAuk._modules = [...this._modules] as any;
+    newAuk._plugins = [...this._plugins] as Array<{
+      name: string;
+      fn: PluginFn<S & Record<EventName, Schema>>;
+      delivery?: Delivery;
+    }>;
+    newAuk._modules = [...this._modules] as Array<{
+      name: string;
+      fn: ModuleFn<S & Record<EventName, Schema>>;
+      delivery?: Delivery;
+    }>;
     newAuk._cleanupHandlers = [...this._cleanupHandlers];
     newAuk._isShuttingDown = this._isShuttingDown;
 
@@ -1208,6 +1281,34 @@ export class Auk<S extends EventSchemas = {}> {
     newAuk.context.health = { ...this.context.health };
 
     return newAuk;
+  }
+
+  /**
+   * Define multiple event schemas at once for type safety.
+   * This is a more convenient alternative to chaining multiple .event() calls.
+   * @param eventSchemas - An object where keys are event names and values are TypeBox schemas
+   * @returns A new Auk instance with all event schemas registered
+   *
+   * @example
+   * ```typescript
+   * const app = new Auk({ config: { env: "development" } })
+   *   .events({
+   *     "user.created": Type.Object({ id: Type.String(), email: Type.String() }),
+   *     "user.updated": Type.Object({ id: Type.String(), changes: Type.Record(Type.String(), Type.Any()) }),
+   *     "order.placed": Type.Object({ orderId: Type.String(), userId: Type.String() })
+   *   });
+   * ```
+   */
+  events<E extends Record<string, TSchema>>(eventSchemas: E): Auk<S & E> {
+    // Start with the current instance
+    let currentAuk: any = this;
+
+    // Register each event schema sequentially
+    for (const [eventName, schema] of Object.entries(eventSchemas)) {
+      currentAuk = currentAuk.event(eventName, schema);
+    }
+
+    return currentAuk as Auk<S & E>;
   }
 
   /**
@@ -1222,7 +1323,8 @@ export class Auk<S extends EventSchemas = {}> {
       undefined,
       this.context.config.maxEventListeners,
       this._mode,
-      this._broker
+      this._broker,
+      (name: string, fn: CleanupFn) => this.addCleanupHandler(name, fn)
     );
 
     // Manually merge event schemas to maintain type safety
@@ -1246,8 +1348,16 @@ export class Auk<S extends EventSchemas = {}> {
     newAuk.eventBus = mergedBus;
 
     // Merge plugins and modules from both instances
-    newAuk._plugins = [...this._plugins, ...other._plugins] as any;
-    newAuk._modules = [...this._modules, ...other._modules] as any;
+    newAuk._plugins = [...this._plugins, ...other._plugins] as Array<{
+      name: string;
+      fn: PluginFn<MergeEventSchemas<S, T>>;
+      delivery?: Delivery;
+    }>;
+    newAuk._modules = [...this._modules, ...other._modules] as Array<{
+      name: string;
+      fn: ModuleFn<MergeEventSchemas<S, T>>;
+      delivery?: Delivery;
+    }>;
 
     // Merge cleanup handlers from both instances
     newAuk._cleanupHandlers = [
@@ -1376,15 +1486,6 @@ export class Auk<S extends EventSchemas = {}> {
   }
 
   /**
-   * Setup process signal handlers for graceful shutdown.
-   * This is now handled in the start() method to avoid conflicts.
-   */
-  private setupShutdownHandlers() {
-    // Signal handlers are now set up in the start() method
-    // to ensure proper coordination with the keep-alive mechanism
-  }
-
-  /**
    * Register a cleanup handler for graceful shutdown.
    * @param name - Name of the cleanup handler.
    * @param fn - The cleanup function.
@@ -1508,87 +1609,163 @@ export class Auk<S extends EventSchemas = {}> {
   }
 
   /**
-   * Register one or more plugins.
+   * Register one or more plugins (event producers).
+   *
+   * Plugins are designed to EMIT events into the system. They typically:
+   * - Connect to external services
+   * - Generate events based on timers or external triggers
+   * - Transform external data into domain events
+   *
+   * Note: Plugins are loaded after modules to ensure listeners are ready.
+   *
    * @param pluginFns - The plugins to register (can include plugins with events).
    * @returns The Auk instance (for chaining) or a new instance if plugins with events are included.
+   *
+   * @example
+   * ```typescript
+   * // A plugin that produces user events
+   * auk.plugins({
+   *   name: "user-producer",
+   *   fn: async (bus, context) => {
+   *     // Emit events periodically or based on external triggers
+   *     context.setInterval(() => {
+   *       bus.emit({ event: "user.heartbeat", data: { timestamp: Date.now() } });
+   *     }, 30000);
+   *   }
+   * });
+   * ```
    */
   plugins<E extends EventSchemas>(
     ...pluginFns: (AukPlugin<S> | PluginWithEvents<S, E>)[]
   ): Auk<MergeEventSchemas<S, E>> | this {
+    // Separate regular plugins from plugins with events
+    const regularPlugins: AukPlugin<S>[] = [];
+    const pluginsWithEvents: PluginWithEvents<S, E>[] = [];
+
     for (const plugin of pluginFns) {
-      // Check if this is a plugin with events
       if ("events" in plugin && typeof plugin === "object" && plugin.events) {
-        // Handle plugin with events - create new instance with merged schemas
-        const pluginWithEvents = plugin as PluginWithEvents<S, E>;
-
-        // Create a new Auk instance with merged event schemas
-        const newAuk = new Auk<MergeEventSchemas<S, E>>({
-          config: this.context.config,
-          logger: this.context.logger,
-          mode: this._mode,
-          broker: this._broker,
-          // Copy any additional context properties
-          ...Object.fromEntries(
-            Object.entries(this.context).filter(
-              ([key]) =>
-                ![
-                  "config",
-                  "logger",
-                  "health",
-                  "addCleanupHandler",
-                  "setInterval",
-                  "setTimeout",
-                ].includes(key)
-            )
-          ),
-        });
-
-        // Create a new event bus with merged schemas by adding each event from the plugin
-        let newBus = this.eventBus as any;
-        for (const [eventName, schema] of Object.entries(
-          pluginWithEvents.events
-        )) {
-          newBus = newBus.event(eventName, schema);
-        }
-        newAuk.eventBus = newBus;
-
-        // Copy all existing state to the new instance
-        newAuk._plugins = [...this._plugins] as any;
-        newAuk._modules = [...this._modules] as any;
-        newAuk._cleanupHandlers = [...this._cleanupHandlers];
-        newAuk._isShuttingDown = this._isShuttingDown;
-
-        // Copy health status
-        newAuk.context.health = { ...this.context.health };
-
-        // Register the plugin itself
-        newAuk._plugins.push({
-          name: pluginWithEvents.name,
-          fn: pluginWithEvents.fn as any,
-          delivery: pluginWithEvents.delivery,
-        });
-
-        return newAuk as Auk<MergeEventSchemas<S, E>>;
+        pluginsWithEvents.push(plugin as PluginWithEvents<S, E>);
       } else {
-        // Handle regular plugin
-        const name = getPluginName(plugin as AukPlugin<S>);
-        if (!name) throw new Error("All plugins must have a name");
-        const delivery =
-          typeof plugin === "function" ? undefined : (plugin as any).delivery;
-        this._plugins.push({
-          name,
-          fn: getPluginFn(plugin as AukPlugin<S>),
-          delivery,
-        });
+        regularPlugins.push(plugin as AukPlugin<S>);
       }
     }
+
+    // Validate that we have at most one plugin with events
+    if (pluginsWithEvents.length > 1) {
+      throw new Error(
+        "Cannot register multiple plugins with events in a single .plugins() call. " +
+          "Register them separately or use .events() to define schemas first."
+      );
+    }
+
+    // Register all regular plugins
+    for (const plugin of regularPlugins) {
+      const name = getPluginName(plugin);
+      if (!name) throw new Error("All plugins must have a name");
+      const delivery =
+        typeof plugin === "function" ? undefined : (plugin as any).delivery;
+      // Explicitly type the function to preserve generic type information
+      const pluginFn: PluginFn<S> = getPluginFn(plugin);
+      this._plugins.push({
+        name,
+        fn: pluginFn,
+        delivery,
+      });
+    }
+
+    // Handle plugin with events if present
+    if (pluginsWithEvents.length === 1) {
+      const pluginWithEvents = pluginsWithEvents[0]!; // Safe because we checked length === 1
+
+      // Create a new Auk instance with merged event schemas
+      const newAuk = new Auk<MergeEventSchemas<S, E>>({
+        config: this.context.config,
+        logger: this.context.logger,
+        mode: this._mode,
+        broker: this._broker,
+        // Copy any additional context properties
+        ...Object.fromEntries(
+          Object.entries(this.context).filter(
+            ([key]) =>
+              ![
+                "config",
+                "logger",
+                "health",
+                "addCleanupHandler",
+                "setInterval",
+                "setTimeout",
+              ].includes(key)
+          )
+        ),
+      });
+
+      // Create a new event bus with merged schemas by adding each event from the plugin
+      let newBus = this.eventBus as any;
+      for (const [eventName, schema] of Object.entries(
+        pluginWithEvents.events
+      )) {
+        newBus = newBus.event(eventName, schema);
+      }
+      newAuk.eventBus = newBus;
+
+      // Copy all existing state to the new instance (including regular plugins we just added)
+      newAuk._plugins = [...this._plugins] as Array<{
+        name: string;
+        fn: PluginFn<MergeEventSchemas<S, E>>;
+        delivery?: Delivery;
+      }>;
+      newAuk._modules = [...this._modules] as Array<{
+        name: string;
+        fn: ModuleFn<MergeEventSchemas<S, E>>;
+        delivery?: Delivery;
+      }>;
+      newAuk._cleanupHandlers = [...this._cleanupHandlers];
+      newAuk._isShuttingDown = this._isShuttingDown;
+
+      // Copy health status
+      newAuk.context.health = { ...this.context.health };
+
+      // Register the plugin with events itself
+      newAuk._plugins.push({
+        name: pluginWithEvents.name,
+        fn: pluginWithEvents.fn,
+        delivery: pluginWithEvents.delivery,
+      });
+
+      return newAuk as Auk<MergeEventSchemas<S, E>>;
+    }
+
+    // No plugins with events, return current instance
     return this;
   }
 
   /**
-   * Register one or more modules.
+   * Register one or more modules (event consumers).
+   *
+   * Modules are designed to LISTEN to events in the system. They typically:
+   * - Set up event handlers for business logic
+   * - Process domain events and update state
+   * - Trigger side effects based on events
+   *
+   * Note: Modules are loaded before plugins to ensure listeners are ready when events are emitted.
+   *
    * @param moduleFns - The modules to register.
    * @returns The Auk instance (for chaining).
+   *
+   * @example
+   * ```typescript
+   * // A module that handles user events
+   * auk.modules({
+   *   name: "user-handler",
+   *   fn: (bus, context) => {
+   *     // Listen to events and handle them
+   *     bus.on("user.created", (data) => {
+   *       context.logger.info("New user created:", data.id);
+   *       // Process the user creation event
+   *     });
+   *   }
+   * });
+   * ```
    */
   modules(...moduleFns: AukModule<S>[]) {
     for (const mod of moduleFns) {
@@ -1601,67 +1778,57 @@ export class Auk<S extends EventSchemas = {}> {
   }
 
   /**
-   * Start the Auk service, loading modules and plugins.
-   * This method will block and keep the process alive until a shutdown signal is received.
-   * For tests, use startNonBlocking() instead.
-   * @returns A promise that resolves when shutdown is complete.
+   * Create context with logger and cleanup handlers for modules/plugins.
+   * @param name - The name of the module or plugin
+   * @returns Enhanced context with prefixed logger and cleanup handlers
    */
-  async start() {
+  private createContextWithLogger(name: string): AukContext {
+    return {
+      ...this.context,
+      logger: prefixLogger(this.context.logger, name),
+      addCleanupHandler: (cleanupName: string, cleanupFn: CleanupFn) =>
+        this.addCleanupHandler(`${name}-${cleanupName}`, cleanupFn),
+      setInterval: (callback: () => void, delay: number) => {
+        const intervalId = setInterval(callback, delay);
+        this.addCleanupHandler(`${name}-auto-interval-${intervalId}`, () => {
+          clearInterval(intervalId);
+        });
+        return intervalId;
+      },
+      setTimeout: (callback: () => void, delay: number) => {
+        const timeoutId = setTimeout(callback, delay);
+        this.addCleanupHandler(`${name}-auto-timeout-${timeoutId}`, () => {
+          clearTimeout(timeoutId);
+        });
+        return timeoutId;
+      },
+    };
+  }
+
+  /**
+   * Load modules and plugins (shared logic between start() and startNonBlocking()).
+   * @returns A promise that resolves when all modules and plugins are loaded
+   */
+  private async loadModulesAndPlugins(): Promise<void> {
     // Register modules (listeners) first
     for (const { name, fn } of this._modules) {
-      const contextWithLogger = {
-        ...this.context,
-        logger: prefixLogger(this.context.logger, name),
-        addCleanupHandler: (cleanupName: string, cleanupFn: CleanupFn) =>
-          this.addCleanupHandler(`${name}-${cleanupName}`, cleanupFn),
-        setInterval: (callback: () => void, delay: number) => {
-          const intervalId = setInterval(callback, delay);
-          this.addCleanupHandler(`${name}-auto-interval-${intervalId}`, () => {
-            clearInterval(intervalId);
-          });
-          return intervalId;
-        },
-        setTimeout: (callback: () => void, delay: number) => {
-          const timeoutId = setTimeout(callback, delay);
-          this.addCleanupHandler(`${name}-auto-timeout-${timeoutId}`, () => {
-            clearTimeout(timeoutId);
-          });
-          return timeoutId;
-        },
-      };
+      const contextWithLogger = this.createContextWithLogger(name);
 
       // Create a bus with hooks exposed for the module
       const moduleBus = this.createBusWithHooks(name);
       fn(moduleBus, contextWithLogger);
       this.context.logger.info(`[Auk] Module loaded: ${name}`);
     }
+
     // Then run plugins (emitters)
     for (const { name, fn } of this._plugins) {
-      const contextWithLogger = {
-        ...this.context,
-        logger: prefixLogger(this.context.logger, name),
-        addCleanupHandler: (cleanupName: string, cleanupFn: CleanupFn) =>
-          this.addCleanupHandler(`${name}-${cleanupName}`, cleanupFn),
-        setInterval: (callback: () => void, delay: number) => {
-          const intervalId = setInterval(callback, delay);
-          this.addCleanupHandler(`${name}-auto-interval-${intervalId}`, () => {
-            clearInterval(intervalId);
-          });
-          return intervalId;
-        },
-        setTimeout: (callback: () => void, delay: number) => {
-          const timeoutId = setTimeout(callback, delay);
-          this.addCleanupHandler(`${name}-auto-timeout-${timeoutId}`, () => {
-            clearTimeout(timeoutId);
-          });
-          return timeoutId;
-        },
-      };
+      const contextWithLogger = this.createContextWithLogger(name);
 
       // Create a bus with hooks exposed for the plugin
       const pluginBus = this.createBusWithHooks(name);
       try {
-        await fn(contextWithLogger, pluginBus);
+        // Explicitly type the function call to preserve type information
+        await (fn as PluginFn<S>)(pluginBus, contextWithLogger);
         this.context.logger.info(`[Auk] Plugin loaded: ${name}`);
       } catch (error) {
         this.context.logger.error(
@@ -1671,6 +1838,17 @@ export class Auk<S extends EventSchemas = {}> {
         // Continue loading other plugins
       }
     }
+  }
+
+  /**
+   * Start the Auk service, loading modules and plugins.
+   * This method will block and keep the process alive until a shutdown signal is received.
+   * For tests, use startNonBlocking() instead.
+   * @returns A promise that resolves when shutdown is complete.
+   */
+  async start() {
+    await this.loadModulesAndPlugins();
+
     this.context.logger.info(
       `[Auk] Service '${this.context.config.serviceName}' started!`
     );
@@ -1723,70 +1901,8 @@ export class Auk<S extends EventSchemas = {}> {
    * @returns A promise that resolves when startup is complete.
    */
   async startNonBlocking(): Promise<void> {
-    // Register modules (listeners) first
-    for (const { name, fn } of this._modules) {
-      const contextWithLogger = {
-        ...this.context,
-        logger: prefixLogger(this.context.logger, name),
-        addCleanupHandler: (cleanupName: string, cleanupFn: CleanupFn) =>
-          this.addCleanupHandler(`${name}-${cleanupName}`, cleanupFn),
-        setInterval: (callback: () => void, delay: number) => {
-          const intervalId = setInterval(callback, delay);
-          this.addCleanupHandler(`${name}-auto-interval-${intervalId}`, () => {
-            clearInterval(intervalId);
-          });
-          return intervalId;
-        },
-        setTimeout: (callback: () => void, delay: number) => {
-          const timeoutId = setTimeout(callback, delay);
-          this.addCleanupHandler(`${name}-auto-timeout-${timeoutId}`, () => {
-            clearTimeout(timeoutId);
-          });
-          return timeoutId;
-        },
-      };
+    await this.loadModulesAndPlugins();
 
-      // Create a bus with hooks exposed for the module
-      const moduleBus = this.createBusWithHooks(name);
-      fn(moduleBus, contextWithLogger);
-      this.context.logger.info(`[Auk] Module loaded: ${name}`);
-    }
-    // Then run plugins (emitters)
-    for (const { name, fn } of this._plugins) {
-      const contextWithLogger = {
-        ...this.context,
-        logger: prefixLogger(this.context.logger, name),
-        addCleanupHandler: (cleanupName: string, cleanupFn: CleanupFn) =>
-          this.addCleanupHandler(`${name}-${cleanupName}`, cleanupFn),
-        setInterval: (callback: () => void, delay: number) => {
-          const intervalId = setInterval(callback, delay);
-          this.addCleanupHandler(`${name}-auto-interval-${intervalId}`, () => {
-            clearInterval(intervalId);
-          });
-          return intervalId;
-        },
-        setTimeout: (callback: () => void, delay: number) => {
-          const timeoutId = setTimeout(callback, delay);
-          this.addCleanupHandler(`${name}-auto-timeout-${timeoutId}`, () => {
-            clearTimeout(timeoutId);
-          });
-          return timeoutId;
-        },
-      };
-
-      // Create a bus with hooks exposed for the plugin
-      const pluginBus = this.createBusWithHooks(name);
-      try {
-        await fn(contextWithLogger, pluginBus);
-        this.context.logger.info(`[Auk] Plugin loaded: ${name}`);
-      } catch (error) {
-        this.context.logger.error(
-          `[Auk] Failed to load plugin '${name}':`,
-          error
-        );
-        // Continue loading other plugins
-      }
-    }
     this.context.logger.info(
       `[Auk] Service '${this.context.config.serviceName}' started in non-blocking mode!`
     );

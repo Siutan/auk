@@ -87,6 +87,7 @@ class NATSMiddleware {
     string,
     { handler: (data: any) => void; delivery?: Delivery }
   >();
+  private middlewareContext?: any; // Store middleware context instead of using globals
 
   constructor(options: NATSMiddlewareOptions = {}) {
     this.options = options;
@@ -98,6 +99,14 @@ class NATSMiddleware {
       consumerName: options.dlq?.consumerName ?? "auk-dlq-consumer",
       autoCreateStreams: options.dlq?.autoCreateStreams ?? true,
     };
+  }
+
+  /**
+   * Set the middleware context for lifecycle hooks.
+   * This replaces the global context approach with explicit context passing.
+   */
+  setMiddlewareContext(context: any): void {
+    this.middlewareContext = context;
   }
 
   /**
@@ -131,7 +140,7 @@ class NATSMiddleware {
    */
   private async registerStream(event: string): Promise<void> {
     if (this.registeredStreams.has(event)) return;
-    
+
     // if autoCreateStreams is false, assume the stream already exists
     if (!this.dlqConfig.autoCreateStreams) {
       this.registeredStreams.add(event);
@@ -154,7 +163,7 @@ class NATSMiddleware {
       max_bytes: 10 * 1024 * 1024, // 10MB
       // TODO: investigate why max_age breaks everything
       // max_age: 60 * 60 * 10000 // 10 hours
-    }
+    };
 
     // create the stream if not already created
     try {
@@ -230,26 +239,27 @@ class NATSMiddleware {
             const eventObj: AukEvent = { event, data };
 
             // Fire hooks via context if available
-            const context = (global as any).__aukMiddlewareContext;
-            if (context?.hooks?.onReceived) {
-              await context.hooks.onReceived(eventObj, metadata);
+            if (this.middlewareContext?.hooks?.onReceived) {
+              await this.middlewareContext.hooks.onReceived(eventObj, metadata);
             }
 
             handler(data);
             message.ack();
 
-            if (context?.hooks?.onSuccess) {
-              await context.hooks.onSuccess(eventObj, metadata);
+            if (this.middlewareContext?.hooks?.onSuccess) {
+              await this.middlewareContext.hooks.onSuccess(eventObj, metadata);
             }
           } catch (error) {
             const eventObj: AukEvent = {
               event,
               data: this.codec.decode(message.data),
             };
-            const context = (global as any).__aukMiddlewareContext;
-
-            if (context?.hooks?.onFailed) {
-              await context.hooks.onFailed(eventObj, error as Error, metadata);
+            if (this.middlewareContext?.hooks?.onFailed) {
+              await this.middlewareContext.hooks.onFailed(
+                eventObj,
+                error as Error,
+                metadata
+              );
             }
 
             // Handle DLQ logic
@@ -268,12 +278,12 @@ class NATSMiddleware {
               await this.publishToDLQ(event, dlqMetadata);
               message.ack(); // Acknowledge to prevent infinite redelivery
 
-              if (context?.hooks?.onDLQ) {
-                await context.hooks.onDLQ(eventObj, dlqMetadata);
+              if (this.middlewareContext?.hooks?.onDLQ) {
+                await this.middlewareContext.hooks.onDLQ(eventObj, dlqMetadata);
               }
             } else {
-              if (context?.hooks?.onRetry) {
-                await context.hooks.onRetry(
+              if (this.middlewareContext?.hooks?.onRetry) {
+                await this.middlewareContext.hooks.onRetry(
                   eventObj,
                   metadata.attemptCount + 1,
                   metadata
@@ -387,20 +397,16 @@ export function natsMiddleware(
   let isInitialized = false;
 
   return async (event: AukEvent, context, next) => {
-    // Store context globally for subscription handlers
-    (global as any).__aukMiddlewareContext = context;
+    // Store context in the NATS instance for subscription handlers
+    nats.setMiddlewareContext(context);
 
     if (!isInitialized) {
       // Initialize NATS connection on first use
       await nats.ensureConnection();
       isInitialized = true;
 
-      // Register cleanup handler
-      if ((global as any).__aukInstance) {
-        (global as any).__aukInstance.addCleanupHandler("nats-middleware", () =>
-          nats.close()
-        );
-      }
+      // Register cleanup handler using explicit context passing
+      context.addCleanupHandler("nats-middleware", () => nats.close());
     }
 
     // Handle outgoing events (publishing)
