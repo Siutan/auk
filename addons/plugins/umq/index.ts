@@ -1,13 +1,16 @@
-import type { PluginFn } from "../../../core/src";
+/** biome-ignore-all lint/suspicious/noExplicitAny:<Data could be anything, i should change ln 34 though> */
+import type { PluginFn, TSchema } from "../../../core/src";
 import { type RabbitMQConfig, RabbitMQProvider } from "./rabbitmq";
 
 export interface UmqProvider {
   publish(event: string, data: any): Promise<void>;
   subscribe(event: string, handler: (data: any) => void): Promise<void>;
   close(): Promise<void>;
+  setSchemas(schemas: Record<string, TSchema>): void;
 }
 
 export type UmqPluginOptions = {
+  schemas: Record<string, TSchema>;
   events: string[];
 } & (
   | { provider: "rabbitmq"; config: RabbitMQConfig }
@@ -27,6 +30,7 @@ export const umqPlugin = ({
   provider,
   config,
   events,
+  schemas,
 }: UmqPluginOptions): PluginFn<any> => {
   return (auk, ctx, bus) => {
     let umqProvider: UmqProvider;
@@ -34,6 +38,7 @@ export const umqPlugin = ({
     switch (provider) {
       case "rabbitmq":
         umqProvider = new RabbitMQProvider(config);
+        umqProvider.setSchemas(schemas);
         break;
       // case "azure":
       //   // umqProvider = new AzureProvider(config);

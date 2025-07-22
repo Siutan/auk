@@ -1,6 +1,7 @@
 /** biome-ignore-all lint/suspicious/noExplicitAny: <Data could be anything> */
 
 import amqp, { type ConsumeMessage } from "amqplib";
+import { type TSchema, Value } from "../../../core/src";
 import type { UmqProvider } from "./index";
 
 export interface RabbitMQConfig {
@@ -10,10 +11,15 @@ export interface RabbitMQConfig {
 }
 
 export class RabbitMQProvider implements UmqProvider {
+  private schemas: Record<string, TSchema> = {};
   private connection: amqp.ChannelModel | null = null;
   private channel: amqp.Channel | null = null;
 
   constructor(private config: RabbitMQConfig) {}
+
+  setSchemas(schemas: Record<string, TSchema>): void {
+    this.schemas = schemas;
+  }
 
   private async connect() {
     if (this.connection) return;
@@ -27,6 +33,14 @@ export class RabbitMQProvider implements UmqProvider {
 
     const exchange = this.config.exchange || "auk_events";
     await this.channel.assertExchange(exchange, "topic", { durable: false });
+    const schema = this.schemas[event];
+    if (schema && !Value.Check(schema, data.payload)) {
+      console.error(
+        `Invalid event payload for ${event}:`,
+        Value.Errors(schema, data.payload)
+      );
+      return;
+    }
     const message = typeof data === "string" ? data : JSON.stringify(data);
     this.channel.publish(exchange, event, Buffer.from(message));
   }
@@ -57,6 +71,14 @@ export class RabbitMQProvider implements UmqProvider {
             }
           }
           if (data.event) {
+            const schema = this.schemas[data.event];
+            if (schema && !Value.Check(schema, data.payload)) {
+              console.error(
+                `Invalid event payload for ${data.event}:`,
+                Value.Errors(schema, data.payload)
+              );
+              return;
+            }
             handler(data);
           }
         }

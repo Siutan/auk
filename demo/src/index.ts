@@ -37,7 +37,8 @@ auk.plugins(
     config: {
       url: "amqp://localhost",
     },
-    events: ["test.event"],
+    events: ["test.event", "test.event.processed"],
+    schemas: Events,
   })
 );
 
@@ -50,7 +51,6 @@ auk.consumer("user.creation.started", (data, ctx) => {
 });
 
 auk.consumer("test.event", (data, ctx) => {
-  console.log('test.event data:', data);
   ctx.logger.info("Received test event:", data);
   auk.umq.emit("test.event.processed", { message: (data as any).message, processed: true });
 });
