@@ -19,14 +19,16 @@
     "clean": "rm -rf dist",
     "prepublishOnly": "bun run build.ts"
   },
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
-    "@sentry/bun": "^9.40.0",
-    "nats": "^2.29.3"
+    "amqplib": "^0.10.3",
+    "@azure/service-bus": "^7.9.0",
+    "kafkajs": "^2.2.4"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.4",
+    "@types/bun": "latest"
   }
 }

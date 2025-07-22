@@ -5,4 +5,4 @@
 export * from "./distributed/nats/index.js";
 
 // Producers
-export * from "./producers/webhook/index.js";
+export * from "./plugins/webhook/index.js";

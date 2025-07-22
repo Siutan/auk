@@ -1,5 +1,6 @@
 // Re-export TypeBox for convenience
-export { type Static, type TSchema, Type } from "@sinclair/typebox";
+export { Type as T, type Static, type TSchema } from "@sinclair/typebox";
+export { Value } from "@sinclair/typebox/value";
 // Re-export main classes
 export {
   Auk,

@@ -1,21 +1,53 @@
-import { Auk, Type, ProducerHandler, AukContext, Static } from "../src";
-
+import { umqPlugin } from "../../addons/plugins/umq/index.js";
+import { webhookPlugin } from "../../addons/plugins/webhook/index.js";
+import { Auk, T } from "../../core/src/index.js";
 
 const Events = {
-  "user.creation": Type.Object({ id: Type.String(), email: Type.String() }),
-  "user.creation.completed": Type.Object({
-    id: Type.String(),
-    email: Type.String(),
-    at: Type.String(),
+  "webhook.event": T.Object({
+    id: T.String(),
   }),
-  "user.creation.failed": Type.Object({
-    id: Type.String(),
-    email: Type.String(),
-    error: Type.String(),
+  "user.creation.started": T.Object({
+    id: T.String(),
   }),
-}
+  "test.event": T.Object({
+    message: T.String(),
+  }),
+} as const;
 
-// Create Auk instance with events
-const auk = new Auk(Events, { config: { env: "development" } });
+const auk = new Auk(Events, {
+  config: {
+    serviceName: "my-app",
+    env: "development",
+  },
+});
 
-// Register a producer
+auk.plugins(
+  webhookPlugin({
+    eventName: "webhook.event",
+  }),
+  webhookPlugin({
+    eventName: "user.creation.started",
+  }),
+  umqPlugin({
+    provider: "rabbitmq",
+    config: {
+      url: "amqp://localhost",
+    },
+  })
+);
+
+auk.consumer("webhook.event", (data, ctx) => {
+  ctx.logger.info("Received webhook event:", data);
+});
+
+auk.consumer("user.creation.started", (data, ctx) => {
+  ctx.logger.info("Received user creation event:", data);
+});
+
+auk.consumer("test.event", (data, ctx) => {
+  ctx.logger.info("Received test event:", data);
+});
+
+
+
+await auk.start();

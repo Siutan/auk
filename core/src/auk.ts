@@ -1,19 +1,12 @@
 /** biome-ignore-all lint/suspicious/noExplicitAny: <any is needed for type inference> */
 import type { TSchema, Static } from "@sinclair/typebox";
-import type { EventSchemas, AukMode, CleanupFn, Delivery } from "./types.js";
+import type { AukMode, CleanupFn, Delivery } from "./types.js";
 import type { Broker } from "./broker.js";
 import type { MessageMetadata, LifecycleHooks } from "./lifecycle.js";
 import type { MiddlewareFn, AdvancedMiddlewareFn } from "./middleware.js";
-import type {
-  AukConfig,
-  AukContext,
-  HealthStatus,
-  setAukConfig,
-  prefixLogger,
-} from "./config.js";
+import type { AukConfig, AukContext, HealthStatus } from "./config.js";
 import type {
   TypedEmitFn,
-  ProducerHandler,
   RequiredProducerHandler,
   ProducerFn,
   ConsumerFn,
@@ -28,6 +21,7 @@ import {
  * Plugin function signature for extending Auk instances.
  */
 export type PluginFn<Context extends AukContext = AukContext> = (
+  auk: Auk<any, Context, any>,
   context: Context,
   bus: AukBus<any>
 ) => Promise<void> | void;
@@ -82,6 +76,7 @@ export class Auk<
   Context extends AukContext = AukContext,
   Producers extends Record<string, any> = {}
 > {
+  public webhook?: { server: any; routes: Map<string, any> };
   /**
    * The Auk context object.
    */
@@ -148,10 +143,10 @@ export class Auk<
       env: config?.env ?? defaultConfig.env,
     };
     const defaultLogger: AukContext["logger"] = {
-      info: (...args) => console.info(...args),
-      warn: (...args) => console.warn(...args),
-      error: (...args) => console.error(...args),
-      debug: (...args) => console.debug(...args),
+      info: (...args: unknown[]) => console.info(...args),
+      warn: (...args: unknown[]) => console.warn(...args),
+      error: (...args: unknown[]) => console.error(...args),
+      debug: (...args: unknown[]) => console.debug(...args),
     };
     const serviceLogger = _prefixLogger(
       logger ?? defaultLogger,
@@ -180,6 +175,7 @@ export class Auk<
       ...rest,
     };
     this.context = baseContext as Context;
+    this.webhook = undefined;
     _setAukConfig(fullConfig);
     this.eventBus = new AukBus<EventSchemas>(
       undefined,
@@ -207,7 +203,7 @@ export class Auk<
       EventSchemas & Record<EventName, Schema>,
       Context,
       Producers
-    >({
+    >(this.events as any, {
       ...this.context,
       mode: this._mode,
       broker: this._broker,
@@ -241,13 +237,13 @@ export class Auk<
     for (const plugin of plugins.flat()) {
       if (typeof plugin === "function") {
         // Handle function plugins
-        plugin(this.context, this.eventBus);
+        plugin(this, this.context, this.eventBus);
       } else {
         // Handle plugin objects
         this.addCleanupHandler(`plugin-${plugin.name}`, () => {
           this.context.logger.debug(`[Auk] Cleaning up plugin: ${plugin.name}`);
         });
-        plugin.fn(this.context, this.eventBus);
+        plugin.fn(this, this.context, this.eventBus);
       }
     }
     return this;
@@ -287,7 +283,7 @@ export class Auk<
       EventSchemas & OtherEventSchemas,
       Context,
       Producers
-    >({
+    >(this.events as any, {
       ...this.context,
       mode: this._mode,
       broker: this._broker,

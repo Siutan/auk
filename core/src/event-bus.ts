@@ -26,7 +26,7 @@ export class AukBus<S extends EventSchemas = {}> {
   protected advancedMiddlewares: AdvancedMiddlewareFn[] = [];
   protected wildcardListeners: {
     pattern: string;
-    listener: (data: EventData) => void;
+    listener: (event: string, data: EventData) => void;
     once?: boolean;
     regex?: RegExp;
   }[] = [];
@@ -195,22 +195,20 @@ export class AukBus<S extends EventSchemas = {}> {
    */
   private async applyMiddleware(
     event: AukEvent,
-    metadata?: MessageMetadata,
+    metadata: MessageMetadata,
     delivery?: Delivery
   ): Promise<AukEvent> {
     let processedEvent = event;
 
     // Apply simple middleware first
-    for (const middleware of this.middlewares) {
-      processedEvent = await middleware(processedEvent);
+    if (this.hasMiddleware) {
+      for (const fn of this.middlewares) {
+        processedEvent = await fn(processedEvent);
+      }
     }
 
-    // Apply advanced middleware with context
-    if (this.hasAdvancedMiddleware && metadata) {
-      const middlewareStack = [...this.advancedMiddlewares];
-      let currentIndex = 0;
-
-      // Enhanced context with state management
+    // Apply advanced middleware with context and next
+    if (this.hasAdvancedMiddleware) {
       const middlewareState = new Map<string, any>();
       const context: MiddlewareContext = {
         metadata,
@@ -218,12 +216,8 @@ export class AukBus<S extends EventSchemas = {}> {
         delivery,
         isDistributed: this.mode === "distributed",
         state: {},
-        set: (key: string, value: any) => {
-          middlewareState.set(key, value);
-        },
-        get: (key: string) => {
-          return middlewareState.get(key);
-        },
+        set: (key: string, value: any) => middlewareState.set(key, value),
+        get: (key: string) => middlewareState.get(key),
         addCleanupHandler: (name: string, fn: CleanupFn) => {
           if (this.cleanupHandlerRegistrar) {
             this.cleanupHandlerRegistrar(name, fn);
@@ -235,20 +229,12 @@ export class AukBus<S extends EventSchemas = {}> {
         },
       };
 
-      const next = async (): Promise<AukEvent> => {
-        if (currentIndex >= middlewareStack.length) {
-          return processedEvent;
-        }
+      const chain = this.advancedMiddlewares.reduceRight<() => Promise<AukEvent>>(
+        (next, fn) => () => fn(processedEvent, context, next),
+        async () => processedEvent
+      );
 
-        const middleware = middlewareStack[currentIndex++];
-        if (!middleware) {
-          return processedEvent;
-        }
-
-        return await middleware(processedEvent, context, next);
-      };
-
-      processedEvent = await next();
+      processedEvent = await chain();
     }
 
     return processedEvent;
@@ -285,7 +271,7 @@ export class AukBus<S extends EventSchemas = {}> {
 
       if (pattern.test(eventObj.event)) {
         hasWildcardListeners = true;
-        listener(eventObj.data);
+        listener(eventObj.event, eventObj.data);
 
         // Mark once listeners for removal
         if (once) {
@@ -306,8 +292,7 @@ export class AukBus<S extends EventSchemas = {}> {
   }
 
   /**
-   * Emit an event synchronously without middleware processing.
-   * Use this for performance-critical scenarios when you don't need middleware.
+   * Emit an event synchronously, bypassing middleware.
    * @param eventObj - The event object to emit.
    * @returns True if the event had listeners, false otherwise.
    */
@@ -317,21 +302,6 @@ export class AukBus<S extends EventSchemas = {}> {
   }): boolean;
   emitSync(eventObj: AukEvent): boolean;
   emitSync(eventObj: AukEvent): boolean {
-    if (this.mode === "distributed" && this.broker) {
-      // In distributed mode, only publish to broker (broker handles all delivery)
-      this.broker
-        .publish(eventObj.event as string, eventObj.data)
-        .catch((error) => {
-          console.error(
-            `[AukBus] Failed to publish event ${eventObj.event}:`,
-            error
-          );
-        });
-      // Return true since we published (though we can't know if there were listeners)
-      return true;
-    }
-
-    // In local mode, emit locally only
     return this.emitSyncInternal(eventObj);
   }
 
@@ -347,59 +317,21 @@ export class AukBus<S extends EventSchemas = {}> {
   async emit(eventObj: AukEvent): Promise<boolean>;
   async emit(eventObj: AukEvent): Promise<boolean> {
     const metadata: MessageMetadata = {
+      messageId: `${eventObj.event}-${Date.now()}`,
       attemptCount: 1,
       timestamp: Date.now(),
-      messageId: `${eventObj.event}-${Date.now()}-${Math.random()}`,
     };
 
-    // Fire onReceived hook
     await this.fireHook("onReceived", [eventObj, metadata]);
 
     try {
-      // Fast path: skip validation and async processing when no middleware
-      if (!this.hasMiddleware && !this.hasAdvancedMiddleware) {
-        if (this.mode === "distributed" && this.broker) {
-          // In distributed mode, only publish to broker (broker handles all delivery)
-          await this.broker.publish(eventObj.event as string, eventObj.data);
-          await this.fireHook("onSuccess", [eventObj, metadata]);
-          return true;
-        }
-
-        // In local mode, emit locally only
-        const result = this.emitSyncInternal(eventObj);
-        await this.fireHook("onSuccess", [eventObj, metadata]);
-        return result;
-      }
-
-      // Validation only when middleware is present (they might depend on structure)
-      if (
-        !eventObj ||
-        typeof eventObj.event !== "string" ||
-        typeof eventObj.data !== "object"
-      ) {
-        throw new Error(
-          "AukBus.emit: event must be { event: string, data: Record<string, any> }"
-        );
-      }
-
       const processedEvent = await this.applyMiddleware(eventObj, metadata);
+      const handled = this.emitSyncInternal(processedEvent);
 
-      if (this.mode === "distributed" && this.broker) {
-        // In distributed mode, only publish to broker (broker handles all delivery)
-        await this.broker.publish(
-          processedEvent.event as string,
-          processedEvent.data
-        );
-        await this.fireHook("onSuccess", [processedEvent, metadata]);
-        return true;
-      }
-
-      // In local mode, emit locally only
-      const result = this.emitSyncInternal(processedEvent);
       await this.fireHook("onSuccess", [processedEvent, metadata]);
-      return result;
+      return handled;
     } catch (error) {
-      await this.fireHook("onFailed", [eventObj, error as Error, metadata]);
+      await this.fireHook("onFailed", [eventObj, error, metadata]);
       throw error;
     }
   }
@@ -418,12 +350,12 @@ export class AukBus<S extends EventSchemas = {}> {
   ): this;
   on(
     event: string,
-    listener: (data: any) => void,
+    listener: (data: any, eventName?: string) => void,
     opts?: { delivery?: Delivery }
   ): this;
   on(
     event: string,
-    listener: (data: any) => void,
+    listener: (data: any, eventName?: string) => void,
     // biome-ignore lint/correctness/noUnusedFunctionParameters: opts is accepted for API compatibility and future use, but is currently unused because distributed delivery is handled by middleware, not here.
     opts: { delivery?: Delivery } = {}
   ): this {
@@ -431,9 +363,9 @@ export class AukBus<S extends EventSchemas = {}> {
     if (this.isWildcardPattern(event)) {
       // Pre-compile regex for better performance
       const regex = this.compilePattern(event);
-      this.wildcardListeners.push({ pattern: event, listener, regex });
+      this.wildcardListeners.push({ pattern: event, listener: (eventName, data) => listener(data, eventName), regex });
     } else {
-      this.emitter.on(event, listener);
+      this.emitter.on(event, listener as (data: any) => void);
     }
 
     return this;
@@ -471,19 +403,19 @@ export class AukBus<S extends EventSchemas = {}> {
     event: EventName,
     listener: (data: EventPayloads<S>[EventName]) => void
   ): this;
-  once(event: string, listener: (data: any) => void): this;
-  once(event: string, listener: (data: any) => void): this {
+  once(event: string, listener: (data: any, eventName?: string) => void): this;
+  once(event: string, listener: (data: any, eventName?: string) => void): this {
     if (this.isWildcardPattern(event)) {
       // Pre-compile regex for better performance
       const regex = this.compilePattern(event);
       this.wildcardListeners.push({
         pattern: event,
-        listener,
+        listener: (eventName, data) => listener(data, eventName),
         once: true,
         regex,
       });
     } else {
-      this.emitter.once(event, listener);
+      this.emitter.once(event, listener as (data: any) => void);
     }
     return this;
   }
