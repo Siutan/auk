@@ -23,7 +23,7 @@ const auk = new Auk(Events, {
 // This is much simpler and more intuitive!
 auk
   .producer("order.processed")
-  .from(cron("*/30 * * * * *")) // Every 30 seconds for demo
+  .from(cron("*/5 * * * * *")) // Every 5 seconds for demo
   .handle(({ ctx, emit }) => {
     const randomId = Math.floor(Math.random() * 1000000);
     const mockOrder = {

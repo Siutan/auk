@@ -139,9 +139,3 @@ auk.use(emailProducers).use(orderProducers);
 // 6. Start the service
 console.log("Starting Auk service with new producer API...");
 auk.start();
-
-// The service will now:
-// - Run cron jobs at their scheduled times
-// - Listen to the mock message queue
-// - Process events through registered consumers
-// - All with full type safety!

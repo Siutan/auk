@@ -7,13 +7,14 @@ import {
   setAukConfig as _setAukConfig,
 } from "./config.js";
 import { AukBus } from "./event-bus.js";
-import type { AukMiddleware, LifecycleHooks, MessageMetadata } from "./lifecycle.js";
+import type {
+  AukMiddleware,
+  LifecycleHooks,
+  MessageMetadata,
+} from "./lifecycle.js";
 import type { AdvancedMiddlewareFn, MiddlewareFn } from "./middleware.js";
 import { ProducerBuilder } from "./producer-builder.js";
-import type {
-  ConsumerFn,
-  ProducerFn,
-} from "./producers.js";
+import type { ConsumerFn, ProducerFn } from "./producers.js";
 import type { AukMode, CleanupFn, Delivery } from "./types.js";
 
 /**
@@ -186,10 +187,10 @@ export class Auk<
     );
 
     // Global state removed - middleware now uses explicit context passing
-    
+
     // Run onAukInit hook after initialization
-    this.runHook('onAukInit', { auk: this }).catch(error => {
-      this.context.logger.error('[Auk] onAukInit hook failed:', error);
+    this.runHook("onAukInit", { auk: this }).catch((error) => {
+      this.context.logger.error("[Auk] onAukInit hook failed:", error);
     });
   }
 
@@ -323,27 +324,30 @@ export class Auk<
     const name = opts?.name ?? `consumer-${String(eventName)}-${Date.now()}`;
 
     // Wrap handler with lifecycle hooks
-    const wrappedHandler: ConsumerFn<EventSchemas[EventName], Context> = async (payload, ctx) => {
+    const wrappedHandler: ConsumerFn<EventSchemas[EventName], Context> = async (
+      payload,
+      ctx
+    ) => {
       try {
         // Fire onEventConsumed hook before processing
-        await this.runHook('onEventConsumed', {
+        await this.runHook("onEventConsumed", {
           eventName,
           payload,
           consumer: handler as any,
           ctx,
         });
-        
+
         // Execute the actual handler
         await handler(payload, ctx);
       } catch (error) {
         // Fire onConsumeError hook on failure
-         await this.runHook('onConsumeError', {
-           eventName,
-           payload,
-           consumer: handler as any,
-           error: error as Error,
-           ctx,
-         });
+        await this.runHook("onConsumeError", {
+          eventName,
+          payload,
+          consumer: handler as any,
+          error: error as Error,
+          ctx,
+        });
         throw error;
       }
     };
@@ -355,13 +359,24 @@ export class Auk<
       delivery: opts?.delivery,
     });
 
+    // Register the consumer with the event bus for local mode
+    if (this._mode === "local") {
+      this.eventBus.on(String(eventName), (data) => {
+        const contextWithLogger = this.createContextWithLogger(name);
+        wrappedHandler(data, contextWithLogger as Context);
+      });
+    }
+
     // Run onConsumerRegistered hook
-    this.runHook('onConsumerRegistered', {
+    this.runHook("onConsumerRegistered", {
       eventName,
       consumer: handler as any,
       delivery: opts?.delivery,
-    }).catch(error => {
-      this.context.logger.error('[Auk] onConsumerRegistered hook failed:', error);
+    }).catch((error) => {
+      this.context.logger.error(
+        "[Auk] onConsumerRegistered hook failed:",
+        error
+      );
     });
 
     return this;
@@ -391,12 +406,15 @@ export class Auk<
     );
 
     // Run onProducerRegistered hook
-    this.runHook('onProducerRegistered', {
+    this.runHook("onProducerRegistered", {
       auk: this,
       eventName,
       builder,
-    }).catch(error => {
-      this.context.logger.error('[Auk] onProducerRegistered hook failed:', error);
+    }).catch((error) => {
+      this.context.logger.error(
+        "[Auk] onProducerRegistered hook failed:",
+        error
+      );
     });
 
     return builder;
@@ -467,6 +485,11 @@ export class Auk<
    * @returns The Auk instance (for chaining)
    */
   useMiddleware(mw: AukMiddleware<EventSchemas>): this {
+    // If the middleware has a runHook property, pass our runHook function to it
+    if ("runHook" in mw && typeof mw.runHook === "undefined") {
+      (mw as any).runHook = this.runHook.bind(this);
+    }
+
     this._middlewares.push(mw);
     return this;
   }
@@ -487,7 +510,10 @@ export class Auk<
         try {
           await fn(opts);
         } catch (error) {
-          this.context.logger.error(`[Auk] Middleware hook ${String(hook)} failed:`, error);
+          this.context.logger.error(
+            `[Auk] Middleware hook ${String(hook)} failed:`,
+            error
+          );
         }
       }
     }
@@ -657,9 +683,9 @@ export class Auk<
     this._isShuttingDown = true;
     this.context.health.status = "unhealthy";
     this.context.logger.info("[Auk] Starting shutdown sequence...");
-    
+
     // Run onAukStop hook
-    await this.runHook('onAukStop', { auk: this });
+    await this.runHook("onAukStop", { auk: this });
 
     // Run cleanup handlers in reverse order (LIFO)
     for (const { name, fn } of this._cleanupHandlers.reverse()) {
@@ -766,7 +792,6 @@ export class Auk<
         `[Auk] Loaded ${this._registeredProducers.size} producers`
       );
     }
-    
   }
 
   /**
@@ -777,8 +802,8 @@ export class Auk<
    */
   async start() {
     // Run onAukStart hook
-    await this.runHook('onAukStart', { auk: this });
-    
+    await this.runHook("onAukStart", { auk: this });
+
     await this.loadConsumersAndProducers();
 
     this.context.logger.info(

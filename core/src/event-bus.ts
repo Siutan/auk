@@ -330,7 +330,16 @@ export class AukBus<S extends EventSchemas = {}> {
       // Fire onEventDispatch hook before emitting to listeners
       await this.fireHook("onEventDispatch", [processedEvent, metadata]);
       
-      const handled = this.emitSyncInternal(processedEvent);
+      let handled = false;
+      
+      // In distributed mode, publish to broker instead of local emission
+      if (this.mode === "distributed" && this.broker) {
+        await this.broker.publish(processedEvent.event, processedEvent.data);
+        handled = true;
+      } else {
+        // Local mode - emit to local listeners
+        handled = this.emitSyncInternal(processedEvent);
+      }
 
       await this.fireHook("onSuccess", [processedEvent, metadata]);
       return handled;
