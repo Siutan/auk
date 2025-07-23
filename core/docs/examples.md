@@ -1,6 +1,7 @@
 # Auk Examples
 
 This guide provides comprehensive examples of using Auk for various event-driven patterns and use cases.
+you can find more examples in the [examples](../examples/) directory.
 
 ---
 
