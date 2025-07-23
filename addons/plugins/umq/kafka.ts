@@ -1,1 +1,0 @@
-// Kafka provider for UMQ plugin

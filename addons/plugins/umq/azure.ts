@@ -1,1 +1,0 @@
-// Azure Service Bus provider for UMQ plugin
