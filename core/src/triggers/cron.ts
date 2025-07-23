@@ -6,6 +6,7 @@ import type { TriggerSource } from "../triggers.js";
  *
  * @param expr - Cron expression (simplified: only supports basic intervals for demo)
  * @returns TriggerSource that fires on the cron schedule
+ * @internal This is a basic implementation for demo/testing only. Not intended for production use.
  */
 export function cron(expr: string): TriggerSource<void> {
   return {

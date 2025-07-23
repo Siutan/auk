@@ -22,7 +22,5 @@ export * from "./lifecycle.js";
 export * from "./middleware.js";
 // Re-export new producer builder and triggers
 export { ProducerBuilder } from "./producer-builder.js";
-export { cron } from "./triggers/cron.js";
-export { type MQClient, mqListener } from "./triggers/mq-listener.js";
 export type { TriggerSource } from "./triggers.js";
 export * from "./types.js";

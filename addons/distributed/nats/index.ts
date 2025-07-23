@@ -92,10 +92,6 @@ export class NatsBroker implements Broker {
   private dlqEnabled: boolean;
   private dlqConfig: Required<DLQConfig>;
   private registeredStreams = new Set<string>();
-  private eventListeners = new Map<
-    string,
-    { handler: (data: any) => void; delivery?: Delivery }
-  >();
   private runHook?: HookRunner;
 
   constructor(private options: NATSMiddlewareOptions = {}) {
@@ -175,7 +171,7 @@ export class NatsBroker implements Broker {
    * Convert event name to valid stream name (replace dots with underscores)
    */
   private getStreamName(event: string): string {
-    return event.replace(/\./g, '_');
+    return event.replace(/\./g, "_");
   }
 
   /**
@@ -277,7 +273,9 @@ export class NatsBroker implements Broker {
     if (!this.dlqEnabled) return;
 
     const js = await this.ensureJetStream();
-    const dlqStreamName = `${this.getStreamName(event)}${this.dlqConfig.streamSuffix}`;
+    const dlqStreamName = `${this.getStreamName(event)}${
+      this.dlqConfig.streamSuffix
+    }`;
 
     const encodedData = this.codec.encode(metadata);
     await js.publish(dlqStreamName, encodedData);
@@ -307,7 +305,10 @@ export class NatsBroker implements Broker {
     await this.connect();
     await this.registerStream(event);
 
-    const queueGroup = opts?.delivery === "queue" ? `auk-${this.getStreamName(event)}` : undefined;
+    const queueGroup =
+      opts?.delivery === "queue"
+        ? `auk-${this.getStreamName(event)}`
+        : undefined;
     const subscriptionKey = `${event}-${queueGroup || "broadcast"}`;
 
     if (this.subscriptions.has(subscriptionKey)) {
@@ -319,6 +320,7 @@ export class NatsBroker implements Broker {
 
       const consumerConfig = {
         durable_name: queueGroup,
+        deliver_group: queueGroup,
         ack_policy: AckPolicy.Explicit,
         deliver_policy: DeliverPolicy.New, // Only deliver new messages
         max_deliver: this.dlqConfig.maxDeliver,
@@ -327,11 +329,14 @@ export class NatsBroker implements Broker {
       console.log(
         `[NATS] Creating JetStream consumer for event: ${event} with queue: ${queueGroup}`
       );
-      
+
       // Create or get the consumer using the modern API
       const streamName = this.getStreamName(event);
-      const jsm = await this.connection!.jetstreamManager();
-      
+      if (!this.connection) {
+        throw new Error("NATS connection is not initialized");
+      }
+      const jsm = await this.connection.jetstreamManager();
+
       // Try to create consumer, if it exists, just get it
       try {
         await jsm.consumers.add(streamName, consumerConfig);
@@ -341,7 +346,7 @@ export class NatsBroker implements Broker {
           throw error;
         }
       }
-      
+
       const consumer = await js.consumers.get(streamName, queueGroup);
 
       this.subscriptions.set(subscriptionKey, consumer);
@@ -350,7 +355,7 @@ export class NatsBroker implements Broker {
       (async () => {
         // Use consume() for continuous message processing
         const messages = await consumer.consume({ max_messages: 1000 });
-        
+
         // Process messages as they arrive
         for await (const message of messages) {
           const data = this.codec.decode(message.data);
@@ -361,7 +366,7 @@ export class NatsBroker implements Broker {
               brokerType: "NATS",
               eventName: event,
               payload: data,
-              attemptCount: message.info.redeliveryCount,
+              attemptCount: message.info.deliveryCount,
               delivery: opts?.delivery,
             }).catch((error) => {
               console.error(
@@ -381,7 +386,7 @@ export class NatsBroker implements Broker {
                 brokerType: "NATS",
                 eventName: event,
                 payload: data,
-                attemptCount: message.info.redeliveryCount,
+                attemptCount: message.info.deliveryCount,
               }).catch((error) => {
                 console.error(
                   "[NATS] onBrokerMessageProcessed hook failed:",
@@ -397,7 +402,7 @@ export class NatsBroker implements Broker {
                 eventName: event,
                 payload: data,
                 error,
-                attemptCount: message.info.redeliveryCount,
+                attemptCount: message.info.deliveryCount,
                 maxAttempts: this.dlqConfig.maxDeliver,
               }).catch((hookError) => {
                 console.error(
@@ -410,12 +415,12 @@ export class NatsBroker implements Broker {
             // Handle DLQ logic
             if (
               this.dlqEnabled &&
-              message.info.redeliveryCount >= this.dlqConfig.maxDeliver
+              message.info.deliveryCount >= this.dlqConfig.maxDeliver
             ) {
               const dlqMetadata: DLQMessageMetadata = {
                 originalEvent: event,
                 originalData: data,
-                attemptCount: message.info.redeliveryCount,
+                attemptCount: message.info.deliveryCount,
                 timestamp: Date.now(),
                 error: error instanceof Error ? error.message : String(error),
               };
@@ -440,7 +445,7 @@ export class NatsBroker implements Broker {
                   brokerType: "NATS",
                   eventName: event,
                   payload: data,
-                  attemptCount: message.info.redeliveryCount,
+                  attemptCount: message.info.deliveryCount,
                   maxAttempts: this.dlqConfig.maxDeliver,
                   error,
                 }).catch((hookError) => {
@@ -633,9 +638,9 @@ export class NatsBroker implements Broker {
     try {
       for (const [key, subscription] of this.subscriptions) {
         try {
-          if (typeof (subscription as any).unsubscribe === 'function') {
+          if (typeof (subscription as any).unsubscribe === "function") {
             (subscription as any).unsubscribe();
-          } else if (typeof (subscription as any).stop === 'function') {
+          } else if (typeof (subscription as any).stop === "function") {
             // Consumer type - stop consuming
             (subscription as any).stop();
           }
