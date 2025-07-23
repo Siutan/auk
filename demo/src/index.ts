@@ -19,6 +19,7 @@ const Events = {
 } as const;
 
 const auk = new Auk(Events, {
+  mode: "distributed",
   config: {
     serviceName: "my-app",
     env: "development",
@@ -52,13 +53,14 @@ auk.consumer("user.creation.started", (data, ctx) => {
 
 auk.consumer("test.event", (data, ctx) => {
   ctx.logger.info("Received test event:", data);
-  auk.umq.emit("test.event.processed", { message: (data as any).message, processed: true });
+  auk.umq.emit("test.event.processed", {
+    message: data.message,
+    processed: true,
+  });
 });
 
 auk.consumer("test.event.processed", (data, ctx) => {
   ctx.logger.info("Received processed test event:", data);
 });
-
-
 
 await auk.start();

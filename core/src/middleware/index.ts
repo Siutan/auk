@@ -1,6 +1,10 @@
 /** biome-ignore-all lint/suspicious/noExplicitAny: <any is needed for type inference> */
 import type { AukEvent } from "../types.js";
-import type { AdvancedMiddlewareFn, MiddlewareFn, MiddlewareContext } from "../middleware.js";
+import type {
+  AdvancedMiddlewareFn,
+  MiddlewareFn,
+  MiddlewareContext,
+} from "../middleware.js";
 
 /**
  * Enhanced middleware context with additional utilities.
@@ -140,7 +144,11 @@ export function logging(options: LoggingOptions = {}): AdvancedMiddlewareFn {
     filter,
   } = options;
 
-  return async (event: AukEvent, context: MiddlewareContext, next: () => Promise<AukEvent>) => {
+  return async (
+    event: AukEvent,
+    context: MiddlewareContext,
+    next: () => Promise<AukEvent>
+  ) => {
     const start = performance.now();
 
     // Skip if filter doesn't match
@@ -203,7 +211,11 @@ export function rateLimit(options: RateLimitOptions): AdvancedMiddlewareFn {
 
   const windows = new Map<string, { count: number; resetTime: number }>();
 
-  return async (event: AukEvent, context: MiddlewareContext, next: () => Promise<AukEvent>) => {
+  return async (
+    event: AukEvent,
+    context: MiddlewareContext,
+    next: () => Promise<AukEvent>
+  ) => {
     // Skip if configured
     if (skip?.(event)) {
       return await next();
@@ -329,7 +341,11 @@ export function metrics(options: MetricsOptions = {}): AdvancedMiddlewareFn {
 
   const metricsCollector = collector || defaultCollector;
 
-  return async (event: AukEvent, context: MiddlewareContext, next: () => Promise<AukEvent>) => {
+  return async (
+    event: AukEvent,
+    context: MiddlewareContext,
+    next: () => Promise<AukEvent>
+  ) => {
     const start = performance.now();
 
     // Increment event counter
@@ -378,7 +394,11 @@ export function metrics(options: MetricsOptions = {}): AdvancedMiddlewareFn {
  * Timing middleware - adds timing information to events.
  */
 export function timing(): AdvancedMiddlewareFn {
-  return async (event: AukEvent, context: MiddlewareContext, next: () => Promise<AukEvent>) => {
+  return async (
+    event: AukEvent,
+    context: MiddlewareContext,
+    next: () => Promise<AukEvent>
+  ) => {
     const start = performance.now();
 
     try {
@@ -449,7 +469,11 @@ export function circuitBreaker(options: {
   let lastFailureTime = 0;
   let nextAttempt = 0;
 
-  return async (event: AukEvent, context: MiddlewareContext, next: () => Promise<AukEvent>) => {
+  return async (
+    event: AukEvent,
+    context: MiddlewareContext,
+    next: () => Promise<AukEvent>
+  ) => {
     const now = Date.now();
 
     // Reset failure count if monitoring period has passed
@@ -461,9 +485,8 @@ export function circuitBreaker(options: {
     if (state === "open") {
       if (now < nextAttempt) {
         throw new Error("Circuit breaker is open");
-      } else {
-        state = "half-open";
       }
+      state = "half-open";
     }
 
     try {
@@ -497,7 +520,11 @@ export function circuitBreaker(options: {
 export function compose(
   ...middlewares: Array<MiddlewareFn | AdvancedMiddlewareFn>
 ): AdvancedMiddlewareFn {
-  return async (event: AukEvent, context: MiddlewareContext, next: () => Promise<AukEvent>) => {
+  return async (
+    event: AukEvent,
+    context: MiddlewareContext,
+    next: () => Promise<AukEvent>
+  ) => {
     let index = -1;
 
     async function dispatch(
@@ -526,17 +553,16 @@ export function compose(
           currentEvent
         );
         return await dispatch(i + 1, transformedEvent);
-      } else {
-        // Advanced middleware - pass the current event and let it call next
-        return await (middleware as AdvancedMiddlewareFn)(
-          currentEvent,
-          context,
-          async () => {
-            // Continue with the next middleware, passing the current event
-            return await dispatch(i + 1, currentEvent);
-          }
-        );
       }
+      // Advanced middleware - pass the current event and let it call next
+      return await (middleware as AdvancedMiddlewareFn)(
+        currentEvent,
+        context,
+        async () => {
+          // Continue with the next middleware, passing the current event
+          return await dispatch(i + 1, currentEvent);
+        }
+      );
     }
 
     return await dispatch(0, event);

@@ -1,21 +1,22 @@
 /** biome-ignore-all lint/suspicious/noExplicitAny: <any is needed for type inference> */
-import type { TSchema, Static } from "@sinclair/typebox";
-import type { AukMode, CleanupFn, Delivery } from "./types.js";
+import type { Static, TSchema } from "@sinclair/typebox";
 import type { Broker } from "./broker.js";
-import type { MessageMetadata, LifecycleHooks } from "./lifecycle.js";
-import type { MiddlewareFn, AdvancedMiddlewareFn } from "./middleware.js";
 import type { AukConfig, AukContext, HealthStatus } from "./config.js";
-import type {
-  TypedEmitFn,
-  RequiredProducerHandler,
-  ProducerFn,
-  ConsumerFn,
-} from "./producers.js";
-import { AukBus } from "./event-bus.js";
 import {
-  setAukConfig as _setAukConfig,
   prefixLogger as _prefixLogger,
+  setAukConfig as _setAukConfig,
 } from "./config.js";
+import { AukBus } from "./event-bus.js";
+import type { LifecycleHooks, MessageMetadata } from "./lifecycle.js";
+import type { AdvancedMiddlewareFn, MiddlewareFn } from "./middleware.js";
+import { ProducerBuilder } from "./producer-builder.js";
+import type {
+  ConsumerFn,
+  ProducerFn,
+  RequiredProducerHandler,
+  TypedEmitFn,
+} from "./producers.js";
+import type { AukMode, CleanupFn, Delivery } from "./types.js";
 
 /**
  * Plugin function signature for extending Auk instances.
@@ -93,7 +94,7 @@ export class Auk<
   private _consumers: {
     name: string;
     eventName: string;
-    fn: ConsumerFn<TSchema, Context>;
+    fn: ConsumerFn<any, Context>;
     delivery?: Delivery;
   }[] = [];
   private _registeredProducers: Map<
@@ -194,6 +195,7 @@ export class Auk<
    * @param schema - The TypeBox schema for the event data
    * @returns A new Auk instance with the event schema registered
    */
+
   event<EventName extends string, Schema extends TSchema>(
     eventName: EventName,
     schema: Schema
@@ -230,10 +232,14 @@ export class Auk<
 
   /**
    * Register plugins for extending functionality.
+   * @deprecated Use producers and consumers instead: auk.producer().from().handle() and auk.consumer()
    * @param plugins - Plugin or array of plugins to register
    * @returns The Auk instance (for chaining)
    */
   plugins(...plugins: (Plugin<Context> | PluginFn<Context>)[]): this {
+    console.warn(
+      "[Auk] plugins() is deprecated. Use producers and consumers instead: auk.producer().from().handle() and auk.consumer()"
+    );
     for (const plugin of plugins.flat()) {
       if (typeof plugin === "function") {
         // Handle function plugins
@@ -250,32 +256,11 @@ export class Auk<
   }
 
   /**
-   * Register modules for extending functionality.
-   * @param modules - Module or array of modules to register
-   * @returns The Auk instance (for chaining)
-   */
-  modules(...modules: (Module<Context> | ModuleFn<Context>)[]): this {
-    for (const module of modules.flat()) {
-      if (typeof module === "function") {
-        // Handle function modules
-        module(this.eventBus, this.context);
-      } else {
-        // Handle module objects
-        this.addCleanupHandler(`module-${module.name}`, () => {
-          this.context.logger.debug(`[Auk] Cleaning up module: ${module.name}`);
-        });
-        module.fn(this.eventBus, this.context);
-      }
-    }
-    return this;
-  }
-
-  /**
    * Compose this Auk instance with another, merging their event schemas and functionality.
    * @param other - Another Auk instance to compose with
    * @returns A new Auk instance with merged functionality
    */
-  use<OtherEventSchemas extends EventSchemas>(
+  compose<OtherEventSchemas extends EventSchemas>(
     other: Auk<OtherEventSchemas, any, any>
   ): Auk<EventSchemas & OtherEventSchemas, Context, Producers> {
     // Create new instance with merged event schemas
@@ -336,21 +321,49 @@ export class Auk<
     this._consumers.push({
       name,
       eventName: String(eventName),
-      fn: handler as ConsumerFn<TSchema, Context>,
+      fn: handler,
       delivery: opts?.delivery,
-    });
-
-    // Register the consumer with the event bus
-    this.eventBus.on(String(eventName), (data: any) => {
-      const contextWithLogger = this.createContextWithLogger(name);
-      handler(data, contextWithLogger as Context);
     });
 
     return this;
   }
 
   /**
+   * Create a new producer builder for the specified event.
+   * This is the new fluent API: .producer(eventName).from(trigger).handle(handler)
+   * @param eventName - The event name to produce
+   * @returns ProducerBuilder for fluent configuration
+   */
+  producer<Evt extends keyof EventSchemas>(
+    eventName: Evt
+  ): ProducerBuilder<EventSchemas, Evt, void, Context> {
+    return new ProducerBuilder<EventSchemas, Evt, void, Context>(
+      {
+        ctx: () => this.context,
+        emit: <E extends keyof EventSchemas>(
+          event: E,
+          payload: Static<EventSchemas[E]>
+        ) => {
+          this.eventBus.emit({ event: String(event), data: payload });
+        },
+      },
+      eventName
+    );
+  }
+
+  /**
+   * Register a module of producers/consumers using a registrar function.
+   * @param fn - Registrar function that accepts this Auk instance
+   * @returns The Auk instance (for chaining)
+   */
+  use(fn: (auk: this) => any): this {
+    fn(this);
+    return this;
+  }
+
+  /**
    * Register a producer that can be called via asMethods().
+   * @deprecated Use the new fluent API: auk.producer(eventName).from(trigger).handle(handler)
    * @param producerName - The name of the producer
    * @param producerFn - The producer function
    * @returns The Auk instance (for chaining)
@@ -363,59 +376,23 @@ export class Auk<
     Context,
     Producers & Record<ProducerName, typeof producerFn>
   > {
+    console.warn(
+      `[Auk] registerProducer() is deprecated. Use the new fluent API: auk.producer("${producerName}").from(trigger).handle(handler)`
+    );
     this._registeredProducers.set(producerName, producerFn);
     return this as any;
   }
 
   /**
    * Get an object with methods for each registered producer.
+   * @deprecated Use the new fluent API: auk.producer(eventName).from(trigger).handle(handler)
    * @returns Object with producer methods
    */
   asMethods(): Producers {
-    const methods: any = {};
-
-    for (const [
-      producerName,
-      producerFn,
-    ] of this._registeredProducers.entries()) {
-      methods[producerName] = <EventName extends keyof EventSchemas>(
-        eventName: EventName,
-        opts: {
-          handler: RequiredProducerHandler<
-            EventSchemas[EventName],
-            Context,
-            EventSchemas
-          >;
-        }
-      ) => {
-        // Create a fully typed emit function that knows about all event schemas
-        const typedEmitFn: TypedEmitFn<EventSchemas> = <
-          E extends keyof EventSchemas
-        >(
-          event: E,
-          payload: Static<EventSchemas[E]>
-        ) => {
-          this.eventBus.emit({ event: String(event), data: payload });
-        };
-
-        return producerFn(eventName, {
-          handler: (args) =>
-            (
-              opts.handler as RequiredProducerHandler<
-                EventSchemas[EventName],
-                Context,
-                EventSchemas
-              >
-            )({
-              payload: args.payload,
-              ctx: this.context, // Always provide Auk's context
-              emit: typedEmitFn, // Always provide the emit function
-            }),
-        });
-      };
-    }
-
-    return methods as Producers;
+    console.warn(
+      "[Auk] asMethods() is deprecated. Use the new fluent API: auk.producer(eventName).from(trigger).handle(handler)"
+    );
+    return {} as Producers;
   }
 
   /**
@@ -671,6 +648,27 @@ export class Auk<
    * @returns A promise that resolves when all consumers and producers are loaded
    */
   private async loadConsumersAndProducers(): Promise<void> {
+    if (this._mode === "distributed" && this._broker) {
+      this.context.logger.info(
+        `[Auk] Subscribing ${this._consumers.length} consumers to broker...`
+      );
+      for (const consumer of this._consumers) {
+        this.context.logger.info(
+          `[Auk] Subscribing to event: ${consumer.eventName}`
+        );
+        await this._broker.subscribe(
+          consumer.eventName,
+          (data) => {
+            const contextWithLogger = this.createContextWithLogger(
+              consumer.name
+            );
+            consumer.fn(data, contextWithLogger as Context);
+          },
+          { delivery: consumer.delivery }
+        );
+      }
+    }
+
     // Consumers are already registered via .consumer() method
     this.context.logger.info(
       `[Auk] Loaded ${this._consumers.length} consumers`

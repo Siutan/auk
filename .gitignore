@@ -1,2 +1,6 @@
 repomix-output.xml
 external-assesment-report.md
+# installed modules in the root to satisfy bun types, they are not needed in the project
+node_modules
+package-lock.json
+package.json

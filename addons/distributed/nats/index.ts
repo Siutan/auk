@@ -16,11 +16,9 @@ import {
   type Subscription,
 } from "nats";
 import type {
-  AdvancedMiddlewareFn,
-  AukEvent,
+  Broker,
   Delivery,
   DLQMessageMetadata,
-  MessageMetadata,
 } from "../../../core/src/index.js";
 
 /**
@@ -70,7 +68,7 @@ export interface NATSMiddlewareOptions extends ConnectionOptions {
 /**
  * NATS middleware class that handles distributed messaging.
  */
-class NATSMiddleware {
+export class NatsBroker implements Broker {
   private connection?: NatsConnection;
   private js?: JetStreamClient;
   private jsm?: JetStreamManager;
@@ -79,7 +77,6 @@ class NATSMiddleware {
     string,
     Subscription | JetStreamSubscription
   >();
-  private options: NATSMiddlewareOptions;
   private dlqEnabled: boolean;
   private dlqConfig: Required<DLQConfig>;
   private registeredStreams = new Set<string>();
@@ -87,10 +84,8 @@ class NATSMiddleware {
     string,
     { handler: (data: any) => void; delivery?: Delivery }
   >();
-  private middlewareContext?: any; // Store middleware context instead of using globals
 
-  constructor(options: NATSMiddlewareOptions = {}) {
-    this.options = options;
+  constructor(private options: NATSMiddlewareOptions = {}) {
     this.dlqEnabled = options.dlq?.enabled ?? false;
     this.dlqConfig = {
       enabled: this.dlqEnabled,
@@ -102,17 +97,9 @@ class NATSMiddleware {
   }
 
   /**
-   * Set the middleware context for lifecycle hooks.
-   * This replaces the global context approach with explicit context passing.
-   */
-  setMiddlewareContext(context: any): void {
-    this.middlewareContext = context;
-  }
-
-  /**
    * Ensure connection is established.
    */
-  async ensureConnection(): Promise<NatsConnection> {
+  async connect(): Promise<NatsConnection> {
     if (!this.connection) {
       this.connection = await connect(this.options);
       if (this.dlqEnabled) {
@@ -127,7 +114,7 @@ class NATSMiddleware {
    */
   private async ensureJetStream(): Promise<JetStreamClient> {
     if (!this.js) {
-      await this.ensureConnection();
+      await this.connect();
       if (!this.js) {
         throw new Error("JetStream is not available");
       }
@@ -192,15 +179,16 @@ class NATSMiddleware {
   /**
    * Set up subscription for an event with DLQ support.
    */
-  private async setupSubscription(
+  async subscribe(
     event: string,
     handler: (data: any) => void,
-    delivery?: Delivery
+    opts?: { delivery?: Delivery }
   ): Promise<void> {
-    await this.ensureConnection();
+    console.log(`[NATS] Subscribing to event: ${event} with options:`, opts);
+    await this.connect();
     await this.registerStream(event);
 
-    const queueGroup = delivery === "queue" ? `auk-${event}` : undefined;
+    const queueGroup = opts?.delivery === "queue" ? `auk-${event}` : undefined;
     const subscriptionKey = `${event}-${queueGroup || "broadcast"}`;
 
     if (this.subscriptions.has(subscriptionKey)) {
@@ -210,15 +198,17 @@ class NATSMiddleware {
     if (this.dlqEnabled) {
       const js = await this.ensureJetStream();
 
+      const consumerConfig = {
+        durable_name: queueGroup,
+        ack_policy: AckPolicy.Explicit,
+        deliver_policy: DeliverPolicy.New, // Only deliver new messages
+        max_deliver: this.dlqConfig.maxDeliver
+      };
+
+      console.log(`[NATS] Creating JetStream subscription for event: ${event} with queue: ${queueGroup}`);
       const subscription = await js.subscribe(event, {
         queue: queueGroup,
-        config: {
-          ack_policy: AckPolicy.Explicit,
-          deliver_policy: DeliverPolicy.All,
-          replay_policy: ReplayPolicy.Instant,
-          max_deliver: this.dlqConfig.maxDeliver,
-          ack_wait: 30 * 1000000000, // 30 seconds in nanoseconds
-        },
+        config: consumerConfig,
       });
 
       this.subscriptions.set(subscriptionKey, subscription);
@@ -226,69 +216,26 @@ class NATSMiddleware {
       // Process messages with DLQ support
       (async () => {
         for await (const message of subscription) {
-          const metadata: MessageMetadata = {
-            attemptCount: message.info?.redeliveryCount || 0,
-            timestamp: Date.now(),
-            messageId:
-              message.headers?.get("messageId") || `${event}-${Date.now()}`,
-            delivery,
-          };
-
           try {
             const data = this.codec.decode(message.data);
-            const eventObj: AukEvent = { event, data };
-
-            // Fire hooks via context if available
-            if (this.middlewareContext?.hooks?.onReceived) {
-              await this.middlewareContext.hooks.onReceived(eventObj, metadata);
-            }
-
             handler(data);
             message.ack();
-
-            if (this.middlewareContext?.hooks?.onSuccess) {
-              await this.middlewareContext.hooks.onSuccess(eventObj, metadata);
-            }
           } catch (error) {
-            const eventObj: AukEvent = {
-              event,
-              data: this.codec.decode(message.data),
-            };
-            if (this.middlewareContext?.hooks?.onFailed) {
-              await this.middlewareContext.hooks.onFailed(
-                eventObj,
-                error as Error,
-                metadata
-              );
-            }
-
             // Handle DLQ logic
             if (
               this.dlqEnabled &&
-              metadata.attemptCount >= this.dlqConfig.maxDeliver - 1
+              message.info.redeliveryCount >= this.dlqConfig.maxDeliver
             ) {
               const dlqMetadata: DLQMessageMetadata = {
                 originalEvent: event,
                 originalData: this.codec.decode(message.data),
-                attemptCount: metadata.attemptCount,
+                attemptCount: message.info.redeliveryCount,
                 timestamp: Date.now(),
                 error: error instanceof Error ? error.message : String(error),
               };
-
               await this.publishToDLQ(event, dlqMetadata);
               message.ack(); // Acknowledge to prevent infinite redelivery
-
-              if (this.middlewareContext?.hooks?.onDLQ) {
-                await this.middlewareContext.hooks.onDLQ(eventObj, dlqMetadata);
-              }
             } else {
-              if (this.middlewareContext?.hooks?.onRetry) {
-                await this.middlewareContext.hooks.onRetry(
-                  eventObj,
-                  metadata.attemptCount + 1,
-                  metadata
-                );
-              }
               message.nak(); // Negative acknowledgment for retry
             }
           }
@@ -329,7 +276,7 @@ class NATSMiddleware {
    * Publish an event.
    */
   async publish(event: string, data: any): Promise<void> {
-    await this.ensureConnection();
+    await this.connect();
     await this.registerStream(event);
 
     if (this.dlqEnabled) {
@@ -345,19 +292,7 @@ class NATSMiddleware {
     }
   }
 
-  /**
-   * Subscribe to an event.
-   */
-  subscribe(
-    event: string,
-    handler: (data: any) => void,
-    delivery?: Delivery
-  ): void {
-    this.eventListeners.set(event, { handler, delivery });
-    this.setupSubscription(event, handler, delivery).catch((error) => {
-      console.error(`[NATS] Failed to subscribe to ${event}:`, error);
-    });
-  }
+
 
   /**
    * Close connections and clean up.
@@ -385,55 +320,7 @@ class NATSMiddleware {
   }
 }
 
-/**
- * Create NATS middleware function.
- * @param options - NATS middleware options
- * @returns Advanced middleware function
- */
-export function natsMiddleware(
-  options: NATSMiddlewareOptions = {}
-): AdvancedMiddlewareFn {
-  const nats = new NATSMiddleware(options);
-  let isInitialized = false;
 
-  return async (event: AukEvent, context, next) => {
-    // Store context in the NATS instance for subscription handlers
-    nats.setMiddlewareContext(context);
-
-    if (!isInitialized) {
-      // Initialize NATS connection on first use
-      await nats.ensureConnection();
-      isInitialized = true;
-
-      // Register cleanup handler using explicit context passing
-      context.addCleanupHandler("nats-middleware", () => nats.close());
-    }
-
-    // Handle outgoing events (publishing)
-    if (context.isDistributed) {
-      await nats.publish(event.event, event.data);
-    }
-
-    // Continue to next middleware
-    return await next();
-  };
-}
-
-// Convenience function to register event listeners through middleware
-export function createNATSEventBus(options: NATSMiddlewareOptions = {}) {
-  const nats = new NATSMiddleware(options);
-
-  return {
-    subscribe: (
-      event: string,
-      handler: (data: any) => void,
-      delivery?: Delivery
-    ) => {
-      nats.subscribe(event, handler, delivery);
-    },
-    close: () => nats.close(),
-  };
-}
 
 // Re-export types for convenience
 export type { Delivery } from "../../../core/src/index.js";
