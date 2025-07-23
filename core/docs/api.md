@@ -27,6 +27,11 @@ const Events = {
 } as const;
 ```
 
+Events are registered as the first argument of an auk instance:
+```ts
+const auk = new Auk(Events, { config: { env: "development" } });
+```
+
 ### Fluent Producer API
 
 Producers are registered using the fluent API pattern:
