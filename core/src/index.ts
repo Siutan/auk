@@ -19,7 +19,7 @@ export type { AukEvents, EventPayload } from "./events.js";
 export * from "./events.js";
 export * from "./lifecycle.js";
 // Re-export middleware utilities
-export * from "./middleware/index.js";
+export * from "./middleware.js";
 // Re-export new producer builder and triggers
 export { ProducerBuilder } from "./producer-builder.js";
 export { cron } from "./triggers/cron.js";

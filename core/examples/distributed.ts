@@ -2,7 +2,6 @@ import { NatsBroker } from "../../addons/distributed/nats/index.js";
 import {
   Auk,
   type AukContext,
-  type ProducerHandler,
   T as Type,
 } from "../src/index.js";
 

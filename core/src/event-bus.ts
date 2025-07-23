@@ -326,6 +326,10 @@ export class AukBus<S extends EventSchemas = {}> {
 
     try {
       const processedEvent = await this.applyMiddleware(eventObj, metadata);
+      
+      // Fire onEventDispatch hook before emitting to listeners
+      await this.fireHook("onEventDispatch", [processedEvent, metadata]);
+      
       const handled = this.emitSyncInternal(processedEvent);
 
       await this.fireHook("onSuccess", [processedEvent, metadata]);

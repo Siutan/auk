@@ -8,6 +8,7 @@ export interface TriggerSource<SP = void> {
   /**
    * Subscribe to the trigger source with a listener function.
    * @param listener - Function to call when the trigger fires
+   * @returns Optional cleanup function to unsubscribe
    */
-  subscribe(listener: (payload: SP) => Promise<void> | void): void;
+  subscribe(listener: (payload: SP) => Promise<void> | void): void | (() => void) | (() => Promise<void>);
 }
