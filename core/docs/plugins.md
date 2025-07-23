@@ -1,3 +1,5 @@
+[DEPRICATED] This document is outdated and will be removed soon. Please use producers instead.
+
 # Creating Plugins in Auk
 
 Plugins are responsible for connecting to event sources (queues, cron, webhooks, etc.) and emitting events into the Auk event bus.

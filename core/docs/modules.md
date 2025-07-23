@@ -1,3 +1,5 @@
+[DEPRICATED] This document is outdated and will be removed soon. Please use consumers instead.
+
 # Creating Modules in Auk
 
 Modules encapsulate business logic and subscribe to events from the Auk event bus.
