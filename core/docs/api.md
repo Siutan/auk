@@ -1,50 +1,56 @@
 # Auk API Reference
 
-This document describes the public API of the Auk library as defined in `src/index.ts` and the new global event system in `src/events.ts`.
+This document describes the public API of the Auk event bus and background job framework.
 
 ---
 
-## Global Event System (NEW)
+## Core Concepts
 
-Auk now uses a global, augmentable event map and schema registry for type-safe, ergonomic event-driven development.
+### Event Schemas
 
-### Event Registration
-
-- `defineEvent(eventName, schema)`: Register an event and its TypeBox schema globally. Use module augmentation to add to the `AukEvents` interface for type inference everywhere.
-
-### Producer/Consumer Helpers
-
-- `createProducer(event, fn)`: Create a type-safe event producer. The payload type is inferred from the global event map.
-- `createConsumer(event, fn)`: Create a type-safe event consumer. The payload type is inferred from the global event map.
-
-#### Producer Handler Pattern
-
-Producer handlers can now be defined with optional `ctx` and `emit` parameters:
+Auk uses TypeBox for defining type-safe event schemas:
 
 ```typescript
-// Full handler with ctx and emit
-app.messageQueueProducer("order.processed", {
-  handler: ({ payload, ctx, emit }) => {
-    ctx.logger.info("Processing order", payload);
-    emit("another.event", { /* data */ });
-  },
-});
+import { T } from "auk";
 
-// Simplified handler with just payload
-app.messageQueueProducer("order.processed", {
-  handler: ({ payload }) => {
-    console.log(`Processing order ${payload.orderId}`);
-  },
-});
+const Events = {
+  "user.created": T.Object({
+    id: T.String(),
+    name: T.String(),
+    email: T.String(),
+  }),
+  "order.processed": T.Object({
+    orderId: T.Number(),
+    userId: T.String(),
+    amount: T.Number(),
+  }),
+} as const;
 ```
 
-The `ctx` and `emit` parameters are automatically injected by Auk when the handler is called. Thanks to TypeScript's type inference, you only need to include them in your handler's signature if you intend to use them. When you do, they are guaranteed to be present and correctly typed, so no non-null assertions are needed.
+### Fluent Producer API
 
-This provides a clean and ergonomic way to define producer handlers, whether you need the full context or just the payload.
+Producers are registered using the fluent API pattern:
 
-### Webhook Handler
+```typescript
+auk
+  .producer("event.name")
+  .from(trigger) // cron, mqListener, etc.
+  .withRetry({ max: 3 }) // optional
+  .handle(({ payload, ctx, emit }) => {
+    // Handler logic
+  });
+```
 
-- `aukWebhookHandler(req)`: Type-safe handler for `{ type, data }` events. Validates the event type and payload using the global registry.
+### Consumers
+
+Consumers listen to events with full type safety:
+
+```typescript
+auk.consumer("event.name", (payload, ctx) => {
+  // payload is fully typed based on event schema
+  ctx.logger.info("Processing event", payload);
+});
+```
 
 ---
 
@@ -52,58 +58,129 @@ This provides a clean and ergonomic way to define producer handlers, whether you
 
 ### Auk
 
-The main class for service setup, plugin/module registration, and startup.
+The main class for event bus setup, producer/consumer registration, and service lifecycle management.
 
 #### Constructor
 
 ```typescript
-new Auk(options?: { config?: AukConfig; logger?: AukContext["logger"]; ... })
+new Auk<Events>(events: Events, options?: {
+  config?: AukConfig;
+  logger?: AukContext["logger"];
+  mode?: "local" | "distributed";
+  broker?: Broker;
+})
 ```
 
-- `config`: Optional configuration object.
-- `logger`: Optional custom logger.
+- `events`: Event schemas object defining all available events
+- `config`: Optional configuration object
+- `logger`: Optional custom logger
+- `mode`: Operating mode - "local" for single instance, "distributed" for multi-instance
+- `broker`: Message broker for distributed mode (e.g., NatsBroker)
 
-#### Methods
+#### Producer Methods
 
-- `.plugins(...pluginFns)`: Register one or more plugins.
-- `.modules(...moduleFns)`: Register one or more modules.
-- `.addCleanupHandler(name, fn)`: Register a cleanup handler for shutdown.
-- `.updateHealthCheck(checkName, isHealthy)`: Update a health check status.
-- `.getHealthStatus()`: Get the current health status.
-- `.shutdown()`: Perform graceful shutdown.
-- `.start()`: Start the Auk service (registers modules, then runs plugins).
+- `.producer<E>(eventName: E)`: Start building a producer for the specified event
+- Returns a `ProducerBuilder` for fluent configuration
+
+#### Consumer Methods
+
+- `.consumer<E>(eventName: E, handler: ConsumerFn, options?)`: Register an event consumer
+- `handler`: Function that receives typed payload and context
+- `options`: Optional delivery mode and other consumer options
+
+#### Lifecycle Methods
+
+- `.start()`: Start the service with signal handling and blocking execution
+- `.startNonBlocking()`: Start the service without blocking (for tests)
+- `.shutdown()`: Perform graceful shutdown with cleanup
+- `.addCleanupHandler(name, fn)`: Register a cleanup handler
+
+#### Middleware Methods
+
+- `.middleware(fn)`: Register simple middleware function
+- `.useMiddleware(mw)`: Register comprehensive lifecycle middleware
+
+#### Utility Methods
+
+- `.use(fn)`: Register a module function that configures the Auk instance
+- `.compose(other)`: Compose with another Auk instance, merging event schemas
+- `.ctx()`: Get the current context object
+- `.emit<E>(eventName, payload)`: Emit an event programmatically
 
 ---
 
-### AukBus
+### ProducerBuilder
 
-A type-safe event bus that wraps Node's EventEmitter.
+Fluent builder for configuring producers with triggers, retry logic, and handlers.
 
 #### Methods
 
-- `.middleware(fn)`: Register event middleware.
-- `.emitSync(eventObj)`: Emit an event synchronously (no middleware).
-- `.emit(eventObj)`: Emit an event asynchronously (with middleware).
-- `.on(event, listener)`: Register an event listener (supports wildcards).
-- `.off(event, listener)`: Remove an event listener.
-- `.once(event, listener)`: Register a one-time event listener.
+- `.from<T>(trigger: TriggerSource<T>)`: Bind a trigger source to the producer
+- `.withRetry(opts: { max: number })`: Configure retry behavior
+- `.handle(handler: ProducerBuilderHandler)`: Register the producer handler function
+
+### AukBus
+
+Internal event bus that handles event routing and middleware.
+
+#### Methods
+
+- `.middleware(fn)`: Register simple event middleware
+- `.advancedMiddleware(fn)`: Register advanced middleware with metadata
+- `.emit(eventObj)`: Emit an event with middleware processing
+- `.on(event, listener)`: Register an event listener
+- `.off(event, listener)`: Remove an event listener
+- `.once(event, listener)`: Register a one-time event listener
+
+---
+
+## Triggers
+
+### Built-in Triggers
+
+- `cron(expression: string)`: Create a cron-based trigger
+- `mqListener<T>(queue: string, client: MQClient<T>)`: Create a message queue trigger
+
+### Custom Triggers
+
+Implement the `TriggerSource<T>` interface:
+
+```typescript
+interface TriggerSource<T> {
+  subscribe(listener: (payload: T) => void | Promise<void>): (() => void) | void;
+}
+```
 
 ---
 
 ## Types
 
-- `AukEvents`: The global event map interface (augmentable via module augmentation).
-- `EventPayload<E>`: Type helper to get the payload type for an event.
-- `AukPlugin` / `AukModule`: Plugin/module registration types (named or function).
-- `PluginFn` / `ModuleFn`: Plugin/module function signatures.
-- `AukContext`: Context object passed to plugins and modules (logger, config, health, etc).
-- `AukConfig`: Configuration object for Auk service.
-- `AukEvent`: Represents an event object for AukBus.
-- `MiddlewareFn`: Middleware function signature for event processing.
-- `CleanupFn`: Cleanup function signature for graceful shutdown.
-- `HealthStatus`: Health check status object.
-- `ProducerHandler`: Handler function for producers with optional `ctx` and `emit` parameters that are automatically injected by Auk.
-- `ProducerFn`: Producer function signature for event generators.
+### Core Types
+
+- `EventSchemas`: Record of event names to TypeBox schemas
+- `AukMode`: "local" | "distributed" - operating mode
+- `Delivery`: "queue" | "broadcast" - delivery mode for distributed events
+- `AukEvent<T>`: Event object with event name and typed data
+- `CleanupFn`: Cleanup function signature for graceful shutdown
+
+### Context Types
+
+- `AukContext`: Context object with logger, config, health, and utility methods
+- `AukConfig`: Configuration object for Auk service
+- `HealthStatus`: Health check status object
+
+### Handler Types
+
+- `ProducerBuilderHandler<SP, Context, Events>`: Producer handler with payload, context, and emit
+- `ConsumerFn<T, Context>`: Consumer handler with typed payload and context
+- `MiddlewareFn`: Simple middleware function signature
+- `AdvancedMiddlewareFn`: Advanced middleware with metadata
+
+### Middleware Types
+
+- `AukMiddleware<Events>`: Comprehensive lifecycle middleware interface
+- `LifecycleHooks`: Legacy lifecycle hooks (deprecated)
+- `MessageMetadata`: Metadata for lifecycle events
 
 ---
 
@@ -112,19 +189,54 @@ A type-safe event bus that wraps Node's EventEmitter.
 Auk re-exports TypeBox types and helpers for schema-based event typing:
 
 ```typescript
-import { Type, Static, TSchema } from "auk";
+import { T, Static, TSchema, Value } from "auk";
 ```
 
 ---
 
-## Usage Notes
+## Distributed Mode
 
-- **Type Safety**: Use `defineEvent` and module augmentation for global, type-safe event registration.
-- **Producers/Consumers**: Use `createProducer`/`createConsumer` for ergonomic, type-safe event logic.
-- **Plugins**: Use for connecting to event sources (queues, cron, webhooks, etc). Emit events via the bus or producers.
-- **Modules**: Use for business logic. Subscribe to events via the bus or consumers.
-- **Webhook Ingestion**: Use `aukWebhookHandler` for safe, type-checked external event ingestion.
-- **Context**: Shared object for logger, config, health, and any custom fields.
-- **Graceful Shutdown**: Register cleanup handlers for resource cleanup.
+### NatsBroker
 
-For more details and examples, see the [Usage Guide](../examples/USAGE.md).
+NATS message broker implementation for distributed mode:
+
+```typescript
+import { NatsBroker } from "auk/addons/distributed/nats";
+
+const broker = new NatsBroker({
+  servers: "nats://localhost:4222",
+  dlq: {
+    enabled: true,
+    maxDeliver: 3,
+    streamSuffix: ".DLQ",
+    autoCreateStreams: true,
+  },
+});
+```
+
+### Broker Interface
+
+Custom brokers must implement the `Broker` interface:
+
+```typescript
+interface Broker {
+  connect(): Promise<void>;
+  disconnect(): Promise<void>;
+  publish(subject: string, data: any, options?: any): Promise<void>;
+  subscribe(subject: string, handler: (data: any) => void, options?: any): Promise<() => void>;
+}
+```
+
+---
+
+## Usage Patterns
+
+- **Type Safety**: Define event schemas with TypeBox for compile-time validation
+- **Producers**: Use the fluent API for intuitive producer configuration
+- **Consumers**: Register typed event handlers with automatic payload validation
+- **Triggers**: Combine built-in triggers or create custom ones for any event source
+- **Middleware**: Use lifecycle hooks for monitoring, logging, metrics, and error handling
+- **Distributed**: Scale across multiple instances with NATS broker and delivery modes
+- **Cleanup**: Leverage auto-cleanup features for resource management
+
+For more details and examples, see the [Examples](../examples/) directory.

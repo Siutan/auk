@@ -3,21 +3,22 @@ _I kept it concise, clear, and focused on developer appeal and modern features:_
 
 ---
 
-# Auk: Type-Safe Modular Event Bus & Background Job Framework
+# Auk: Type-Safe Event Bus & Background Job Framework
 
-**Auk** is a lightweight, extensible event bus and background job framework for Bun (and Node.js). Designed for concurrency, type safety, and developer ergonomics, Auk makes it easy to compose, scale, and maintain decoupled services, background jobs, and real-time workflows.
+**Auk** is a lightweight, extensible event bus and background job framework for Bun (and Node.js). Designed for type safety, developer ergonomics, and scalability, Auk makes it easy to build decoupled services, background jobs, and real-time workflows with full TypeScript support.
 
 ---
 
 ## Key Features
 
-- **Type-Safe Event Bus**: Define strict event schemas—never ship an invalid payload again
-- **Modular by Design**: Compose scalable apps from plugins and modules
-- **Shared Context**: Inject logger, config, and database into every handler
-- **Resilient & Robust**: Graceful error handling and lifecycle management
-- **Inter-Module Communication**: Modules and plugins communicate via the event bus, not direct calls
-- **Bun Native (with Node.js support)**: Built for Bun’s speed and ESM, runs great on Node.js too
-- **First-Class TypeScript Support**: Enjoy autocompletion, type inference, and schema validation out of the box
+- **Type-Safe Event Schemas**: Define strict event schemas with TypeBox—never ship an invalid payload again
+- **Fluent Producer API**: Intuitive `.producer(event).from(trigger).handle(handler)` pattern
+- **Flexible Triggers**: Built-in support for cron schedules, message queues, and custom triggers
+- **Distributed Mode**: Scale across multiple processes with NATS broker support
+- **Comprehensive Middleware**: Lifecycle hooks for monitoring, logging, metrics, and error handling
+- **Auto-Cleanup**: Automatic resource cleanup with `context.setInterval()` and `context.setTimeout()`
+- **Graceful Shutdown**: Built-in signal handling and cleanup management
+- **Bun Native**: Built for Bun's speed and ESM, with Node.js compatibility
 
 ---
 
@@ -50,106 +51,152 @@ _I kept it concise, clear, and focused on developer appeal and modern features:_
 See more real-world patterns in the [examples](./examples) folder.
 
 ```typescript
-import { Auk, Type } from "auk";
+import { Auk, cron, T } from "auk";
 
-// 1. Define your event schemas
-const UserCreatedSchema = Type.Object({
-  id: Type.String(),
-  name: Type.String(),
-  email: Type.String(),
+// 1. Define event schemas with TypeBox
+const Events = {
+  "user.created": T.Object({
+    id: T.String(),
+    name: T.String(),
+    email: T.String(),
+  }),
+  "order.processed": T.Object({
+    orderId: T.Number(),
+    userId: T.String(),
+    amount: T.Number(),
+  }),
+} as const;
+
+// 2. Create Auk instance with events
+const auk = new Auk(Events, {
+  config: { env: "development" },
 });
 
-// 2. Register events and create your app
-const app = new Auk().event("user.created", UserCreatedSchema);
+// 3. Register a producer using the fluent API
+auk
+  .producer("order.processed")
+  .from(cron("*/5 * * * * *")) // Every 5 seconds
+  .handle(({ ctx, emit }) => {
+    const mockOrder = {
+      orderId: Math.floor(Math.random() * 1000),
+      userId: `user-${Math.floor(Math.random() * 100)}`,
+      amount: Math.round(Math.random() * 1000 * 100) / 100,
+    };
 
-// 3. Register plugins (emit events)
-app.plugins({
-  name: "user-plugin",
-  fn: async (context, bus) => {
-    bus.emitSync({
-      event: "user.created",
-      data: {
-        id: "user123",
-        name: "Alice Johnson",
-        email: "alice@example.com",
-      },
-    });
-  },
+    ctx.logger.info("Processing order", mockOrder);
+    
+    // Emit events - fully type-safe!
+    emit("order.processed", mockOrder);
+    
+    // Conditionally emit other events
+    if (mockOrder.orderId % 3 === 0) {
+      emit("user.created", {
+        id: mockOrder.userId,
+        name: "John Doe",
+        email: `${mockOrder.userId}@example.com`,
+      });
+    }
+  });
+
+// 4. Register consumers with full type safety
+auk.consumer("order.processed", (order, ctx) => {
+  // order is typed as { orderId: number, userId: string, amount: number }
+  ctx.logger.info(`Order ${order.orderId} processed for ${order.userId}`);
 });
 
-// 4. Register modules (listen to events)
-app.modules({
-  name: "user-module",
-  fn: (bus, context) => {
-    bus.on("user.created", (userData) => {
-      context.logger.info(`New user: ${userData.name} (${userData.email})`);
-    });
-  },
+auk.consumer("user.created", (user, ctx) => {
+  // user is typed as { id: string, name: string, email: string }
+  ctx.logger.info(`User ${user.name} created with email ${user.email}`);
 });
 
-// 5. Start your app!
-app.start();
+// 5. Start the service
+auk.start();
 ```
 
-- **Type Safety**: Invalid event payloads will fail at compile-time—no more guesswork.
-- **Flexible**: Omit event types for rapid prototyping, add schemas for full safety.
-- **Decoupled**: Plugins/modules don’t know about each other—only about events.
-- **Distributed**: Scale across multiple processes/machines with NATS broker support.
+- **Type Safety**: Invalid event payloads fail at compile-time with full TypeScript inference
+- **Fluent API**: Intuitive producer registration with `.producer().from().handle()` pattern
+- **Flexible Triggers**: Built-in cron, message queue, and custom trigger support
+- **Auto-Cleanup**: Timers and resources are automatically cleaned up on shutdown
 
 ---
 
 ## Distributed Mode
 
-Auk supports distributed event processing using message brokers. Events can be distributed across multiple application instances with different delivery guarantees.
+Auk supports distributed event processing using NATS message brokers. Events can be distributed across multiple application instances with different delivery guarantees and built-in Dead Letter Queue (DLQ) support.
 
-### Things to know about distributed mode:
-- Auk only supports NATS brokers for now
-- Wildcards are not supported in distributed mode and will fall back to local processing
+### Features:
+- **NATS Broker Support**: Built-in NATS integration with JetStream
+- **Dead Letter Queue**: Automatic DLQ handling for failed messages
+- **Load Balancing**: Queue delivery mode distributes work across instances
+- **Broadcasting**: Broadcast delivery sends events to all instances
+- **Auto-Cleanup**: Automatic resource management and graceful shutdown
 
 ```typescript
-import { Auk, Type } from "auk";
-import { NATS } from "auk/distributed";
+import { Auk, cron, T } from "auk";
+import { NatsBroker } from "auk/addons/distributed/nats";
 
-const broker = new NATS({ servers: "nats://localhost:4222" });
+// Define event schemas
+const Events = {
+  "job.process": T.Object({
+    jobId: T.String(),
+    type: T.String(),
+    payload: T.Any(),
+  }),
+} as const;
 
-const app = new Auk({
+// Create NATS broker with DLQ support
+const nats = new NatsBroker({
+  servers: "nats://localhost:4222",
+  dlq: {
+    enabled: true,
+    maxDeliver: 3,
+    streamSuffix: ".DLQ",
+    autoCreateStreams: true,
+  },
+});
+
+// Create Auk instance with distributed mode
+const auk = new Auk(Events, {
   mode: "distributed",
-  broker,
-  config: { serviceName: "worker-service" },
-}).event("job.process", Type.Object({ id: Type.String() }));
-
-// Queue delivery: load-balanced across workers
-app.plugins({
-  name: "job-producer",
-  fn: (context, bus) => {
-    // Auto-cleanup timers
-    context.setInterval(() => {
-      bus.emit({ event: "job.process", data: { id: "job-123" } });
-    }, 1000);
-  },
-  delivery: "queue",
-});
-
-// Broadcast delivery: received by all instances
-app.modules({
-  name: "job-worker",
-  fn: (bus, context) => {
-    bus.on(
-      "job.process",
-      (data) => {
-        context.logger.info(`Processing job: ${data.id}`);
-
-        // Auto-cleanup timeouts
-        context.setTimeout(() => {
-          context.logger.info(`Job ${data.id} completed`);
-        }, 500);
-      },
-      { delivery: "queue" }
-    );
+  broker: nats,
+  config: {
+    env: "development",
+    serviceName: "distributed-worker",
   },
 });
 
-app.start();
+// Producer: generates jobs
+auk
+  .producer("job.process")
+  .from(cron("*/10 * * * * *"))
+  .withRetry({ max: 2 })
+  .handle(async ({ ctx, emit }) => {
+    const jobs = Array.from({ length: 5 }, (_, i) => ({
+      jobId: `job-${i + 1}`,
+      type: "data-processing",
+      payload: { data: `sample-data-${i + 1}` },
+    }));
+
+    for (const job of jobs) {
+      emit("job.process", job);
+    }
+  });
+
+// Consumer: processes jobs (load-balanced across workers)
+auk.consumer(
+  "job.process",
+  (job, ctx) => {
+    ctx.logger.info(`Processing job: ${job.jobId}`);
+    
+    // Auto-cleanup timeouts
+    ctx.setTimeout(() => {
+      ctx.logger.info(`Job ${job.jobId} completed`);
+    }, 500);
+  },
+  { delivery: "queue" } // Load-balanced across instances
+);
+
+auk.start();
 ```
 
 **Delivery Modes:**
@@ -157,19 +204,17 @@ app.start();
 - `queue`: Load-balanced across instances (work distribution)
 - `broadcast`: Sent to all instances (notifications, state sync)
 
-**Auto-Cleanup Timers:**
+**Auto-Cleanup Features:**
 
-Auk provides `context.setInterval()` and `context.setTimeout()` that automatically register cleanup handlers. No need to manually clear timers during shutdown as the library will handle it.
+Auk provides `context.setInterval()` and `context.setTimeout()` that automatically register cleanup handlers. No need to manually clear timers during shutdown—the library handles it automatically.
 
 ---
 
 ## Documentation
 
-- [Usage Guide](./USAGE.md)
-- [API Reference](./docs/api.md)
-- [Plugins Guide](./docs/plugins.md)
-- [Modules Guide](./docs/modules.md)
-- [Typed Events](./docs/typed-events.md)
+- [API Reference](./docs/api.md) - Complete API documentation
+- [Examples](./examples/) - Real-world usage patterns and examples
+- [Middleware Guide](./docs/middleware.md) - Lifecycle hooks and middleware system
 
 ---
 

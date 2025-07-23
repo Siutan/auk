@@ -1,13 +1,309 @@
-# Auk Middleware System Guide
+# Auk Middleware System
+
+Auk provides a comprehensive middleware system for monitoring, logging, metrics collection, error handling, and custom business logic throughout the event lifecycle.
+
+---
 
 ## Overview
 
-Auk's middleware system is inspired by Express and Elysia, providing a powerful way to extend the functionality of your event bus. Middleware allows you to:
+The middleware system provides hooks at every stage of the event-driven lifecycle:
 
-- Transform events before they reach listeners
-- Add logging, metrics, and observability
-- Implement cross-cutting concerns like validation, rate limiting, and authentication
-- Compose complex processing pipelines
+- **Auk Lifecycle**: Instance initialization and startup
+- **Producer Lifecycle**: Registration, trigger attachment, and event production
+- **Consumer Lifecycle**: Event dispatch and consumption
+- **Error Handling**: Production and consumption failures
+- **Retry Logic**: Retry attempts and exhaustion
+- **Distributed Events**: DLQ handling and message metadata
+
+---
+
+## Simple Middleware
+
+For basic event processing middleware, use the simple middleware API:
+
+```typescript
+import { Auk, T } from "auk";
+
+const Events = {
+  "user.created": T.Object({ id: T.String(), email: T.String() }),
+} as const;
+
+const auk = new Auk(Events);
+
+// Simple middleware function
+auk.middleware((event, next) => {
+  console.log(`Processing event: ${event.event}`);
+  
+  const start = Date.now();
+  const result = next();
+  const duration = Date.now() - start;
+  
+  console.log(`Event ${event.event} processed in ${duration}ms`);
+  return result;
+});
+```
+
+---
+
+## Advanced Middleware
+
+For comprehensive lifecycle management, implement the `AukMiddleware` interface:
+
+```typescript
+import { AukMiddleware } from "auk";
+
+class MetricsMiddleware implements AukMiddleware<typeof Events> {
+  private metrics = {
+    eventsProduced: 0,
+    eventsConsumed: 0,
+    errors: 0,
+    retries: 0,
+  };
+
+  async onAukStart({ auk }) {
+    console.log("Metrics middleware initialized");
+    
+    // Start metrics reporting
+    auk.ctx().setInterval(() => {
+      console.log("Metrics:", this.metrics);
+    }, 10000);
+  }
+
+  async onEventProduced({ eventName, payload, ctx }) {
+    this.metrics.eventsProduced++;
+    ctx.logger.debug(`Event produced: ${String(eventName)}`);
+  }
+
+  async onEventConsumed({ eventName, payload, consumer, ctx }) {
+    this.metrics.eventsConsumed++;
+    ctx.logger.debug(`Event consumed: ${String(eventName)}`);
+  }
+
+  async onProduceError({ eventName, error, ctx }) {
+    this.metrics.errors++;
+    ctx.logger.error(`Production error for ${String(eventName)}:`, error);
+  }
+
+  async onConsumeError({ eventName, error, ctx }) {
+    this.metrics.errors++;
+    ctx.logger.error(`Consumption error for ${String(eventName)}:`, error);
+  }
+
+  async onRetryAttempt({ eventName, attemptNumber, maxAttempts, ctx }) {
+    this.metrics.retries++;
+    ctx.logger.warn(`Retry ${attemptNumber}/${maxAttempts} for ${String(eventName)}`);
+  }
+}
+
+// Register the middleware
+auk.useMiddleware(new MetricsMiddleware());
+```
+
+---
+
+## Lifecycle Hooks
+
+The `AukMiddleware` interface provides hooks for every stage of the lifecycle:
+
+### Auk Lifecycle
+
+- `onAukInit({ auk })`: Called when Auk instance is initialized
+- `onAukStart({ auk })`: Called when Auk instance starts up
+- `onAukShutdown({ auk })`: Called when Auk instance is shutting down
+
+### Producer Lifecycle
+
+- `onProducerRegistered({ auk, eventName, builder })`: Called when a producer is registered
+- `onSourceAttached({ eventName, source })`: Called when a trigger source is attached
+- `onHandlerAttached({ eventName, handler })`: Called when a handler is attached
+- `onTriggerStart({ eventName, source })`: Called when a trigger starts
+- `onEventProduced({ eventName, payload, ctx })`: Called when an event is produced
+- `onProduceError({ eventName, payload, error, ctx })`: Called when production fails
+
+### Consumer Lifecycle
+
+- `onEventDispatch({ eventName, payload, consumers })`: Called before dispatching to consumers
+- `onEventConsumed({ eventName, payload, consumer, ctx })`: Called when an event is consumed
+- `onConsumeError({ eventName, payload, error, ctx, consumer })`: Called when consumption fails
+
+### Retry and DLQ
+
+- `onRetryAttempt({ eventName, payload, attemptNumber, maxAttempts, error, ctx })`: Called on retry attempts
+- `onRetryExhausted({ eventName, payload, totalAttempts, finalError, ctx })`: Called when retries are exhausted
+- `onDLQMessage({ eventName, payload, metadata, ctx })`: Called when a message is sent to DLQ
+
+---
+
+## Common Middleware Patterns
+
+### Logging Middleware
+
+```typescript
+class LoggingMiddleware implements AukMiddleware<typeof Events> {
+  async onEventProduced({ eventName, payload, ctx }) {
+    ctx.logger.info(`📤 Produced: ${String(eventName)}`, { payload });
+  }
+
+  async onEventConsumed({ eventName, payload, ctx }) {
+    ctx.logger.info(`📥 Consumed: ${String(eventName)}`, { payload });
+  }
+
+  async onProduceError({ eventName, error, ctx }) {
+    ctx.logger.error(`❌ Production failed: ${String(eventName)}`, { error: error.message });
+  }
+
+  async onConsumeError({ eventName, error, ctx }) {
+    ctx.logger.error(`❌ Consumption failed: ${String(eventName)}`, { error: error.message });
+  }
+}
+```
+
+### Performance Monitoring
+
+```typescript
+class PerformanceMiddleware implements AukMiddleware<typeof Events> {
+  private timers = new Map<string, number>();
+
+  async onEventDispatch({ eventName }) {
+    this.timers.set(String(eventName), Date.now());
+  }
+
+  async onEventConsumed({ eventName, ctx }) {
+    const start = this.timers.get(String(eventName));
+    if (start) {
+      const duration = Date.now() - start;
+      ctx.logger.debug(`⏱️  ${String(eventName)} processed in ${duration}ms`);
+      this.timers.delete(String(eventName));
+    }
+  }
+}
+```
+
+### Error Alerting
+
+```typescript
+class AlertingMiddleware implements AukMiddleware<typeof Events> {
+  private errorCounts = new Map<string, number>();
+
+  async onConsumeError({ eventName, error, ctx }) {
+    const key = String(eventName);
+    const count = (this.errorCounts.get(key) || 0) + 1;
+    this.errorCounts.set(key, count);
+
+    if (count >= 5) {
+      // Send alert after 5 consecutive errors
+      ctx.logger.error(`🚨 ALERT: ${key} has failed ${count} times`, { error });
+      // Integration with alerting service would go here
+    }
+  }
+
+  async onEventConsumed({ eventName }) {
+    // Reset error count on successful processing
+    this.errorCounts.delete(String(eventName));
+  }
+}
+```
+
+### Circuit Breaker
+
+```typescript
+class CircuitBreakerMiddleware implements AukMiddleware<typeof Events> {
+  private circuits = new Map<string, { failures: number; lastFailure: number; isOpen: boolean }>();
+  private readonly threshold = 5;
+  private readonly timeout = 60000; // 1 minute
+
+  async onEventDispatch({ eventName, consumers }) {
+    const key = String(eventName);
+    const circuit = this.circuits.get(key);
+
+    if (circuit?.isOpen) {
+      const now = Date.now();
+      if (now - circuit.lastFailure > this.timeout) {
+        // Reset circuit breaker
+        circuit.isOpen = false;
+        circuit.failures = 0;
+      } else {
+        // Circuit is open, skip processing
+        throw new Error(`Circuit breaker is open for ${key}`);
+      }
+    }
+  }
+
+  async onConsumeError({ eventName, ctx }) {
+    const key = String(eventName);
+    const circuit = this.circuits.get(key) || { failures: 0, lastFailure: 0, isOpen: false };
+    
+    circuit.failures++;
+    circuit.lastFailure = Date.now();
+    
+    if (circuit.failures >= this.threshold) {
+      circuit.isOpen = true;
+      ctx.logger.warn(`🔴 Circuit breaker opened for ${key}`);
+    }
+    
+    this.circuits.set(key, circuit);
+  }
+
+  async onEventConsumed({ eventName }) {
+    // Reset failures on successful processing
+    const key = String(eventName);
+    const circuit = this.circuits.get(key);
+    if (circuit) {
+      circuit.failures = 0;
+    }
+  }
+}
+```
+
+---
+
+## Multiple Middleware
+
+You can register multiple middleware instances:
+
+```typescript
+auk
+  .useMiddleware(new LoggingMiddleware())
+  .useMiddleware(new MetricsMiddleware())
+  .useMiddleware(new PerformanceMiddleware())
+  .useMiddleware(new AlertingMiddleware());
+```
+
+Middleware is executed in registration order for most hooks. For error hooks, all middleware is notified regardless of execution order.
+
+---
+
+## Best Practices
+
+1. **Keep middleware focused**: Each middleware should have a single responsibility
+2. **Handle errors gracefully**: Middleware errors shouldn't crash the application
+3. **Use async/await**: Most hooks support async operations
+4. **Leverage context**: Use the provided context for logging and configuration
+5. **Clean up resources**: Use cleanup handlers for any resources created in middleware
+6. **Monitor performance**: Be mindful of middleware overhead in high-throughput scenarios
+
+---
+
+## Legacy Hooks (Deprecated)
+
+The legacy `LifecycleHooks` interface is still supported but deprecated:
+
+```typescript
+// Deprecated - use AukMiddleware instead
+bus.hooks({
+  onReceived: (event, metadata) => {
+    console.log("Event received:", event);
+  },
+  onSuccess: (event, metadata) => {
+    console.log("Event processed:", event);
+  },
+  onFailed: (event, error, metadata) => {
+    console.error("Event failed:", event, error);
+  },
+});
+```
+
+Migrate to the new `AukMiddleware` interface for better type safety and more comprehensive lifecycle coverage.
 
 ## Middleware Types
 
