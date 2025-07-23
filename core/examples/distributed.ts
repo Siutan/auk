@@ -1,19 +1,21 @@
 import { NatsBroker } from "../../addons/distributed/nats/index.js";
-import { Auk, cron, T as Type } from "../src/index.js";
+import { Auk, T } from "../src/index.js";
+import { cron } from "../src/triggers/cron.js";
+
 
 const isProducer = process.argv.includes("--producer");
 
 // Define event schemas
 const Events = {
-  "job.run": Type.Object({
-    jobId: Type.String(),
-    type: Type.String(),
-    payload: Type.Any(),
+  "job.run": T.Object({
+    jobId: T.String(),
+    type: T.String(),
+    payload: T.Any(),
   }),
-  "metrics.update": Type.Object({
-    type: Type.String(),
-    value: Type.Number(),
-    timestamp: Type.Number(),
+  "metrics.update": T.Object({
+    type: T.String(),
+    value: T.Number(),
+    timestamp: T.Number(),
   }),
 } as const;
 

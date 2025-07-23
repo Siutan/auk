@@ -1,4 +1,5 @@
-import { Auk, cron, T } from "../src";
+import { Auk, T } from "../src";
+import { cron } from "../src/triggers/cron.js";
 
 // 1. Define event schemas with TypeBox
 const Events = {
