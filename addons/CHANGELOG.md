@@ -1,5 +1,11 @@
 # @aukjs/addons
 
+## 0.1.2
+
+### Patch Changes
+
+- b96f055: Updated imports to hopefully let it build in ci
+
 ## 0.1.1
 
 ### Patch Changes
