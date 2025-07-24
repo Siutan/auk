@@ -105,7 +105,7 @@ export class Auk<
   private _shutdownResolver?: () => void;
   private _mode: AukMode;
   private _broker?: Broker;
-  private _middlewares: AukMiddleware<EventSchemas>[] = [];
+  public _middlewares: AukMiddleware<EventSchemas>[] = [];
 
   /**
    * Create a new Auk instance.
@@ -201,7 +201,10 @@ export class Auk<
    * @returns A new Auk instance with the event schema registered
    */
 
+
+
   event<EventName extends string, Schema extends TSchema>(
+
     eventName: EventName,
     schema: Schema
   ): Auk<EventSchemas & Record<EventName, Schema>, Context, Producers> {
@@ -425,8 +428,8 @@ export class Auk<
    * @param fn - Registrar function that accepts this Auk instance
    * @returns The Auk instance (for chaining)
    */
-  use(fn: (auk: this) => any): this {
-    fn(this);
+  use(middleware: AukMiddleware<EventSchemas>): this {
+    this._middlewares.push(middleware);
     return this;
   }
 

@@ -59,7 +59,6 @@ export function fromWebhook<S extends TSchema>(
             auk.context.logger.error("Invalid webhook payload:", { errors });
             return new Response("Invalid payload", { status: 400 });
           }
-          console.log('payload', payload);
 
           await listener(payload);
 

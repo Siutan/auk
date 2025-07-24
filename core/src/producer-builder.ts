@@ -47,15 +47,22 @@ export class ProducerBuilder<
 
   /**
    * Bind a trigger source to this producer.
-   * @param source - The trigger source (cron, MQ, etc.)
+   * @param source - The trigger source (cron, MQ, etc.) or a factory function that creates one
    * @returns New ProducerBuilder with the trigger bound
    */
-  from<NewSP>(source: TriggerSource<NewSP>): ProducerBuilder<Events, Evt, NewSP, Context> {
+  from<NewSP>(
+    source: TriggerSource<NewSP> | ((eventName: Evt) => TriggerSource<NewSP>)
+  ): ProducerBuilder<Events, Evt, NewSP, Context> {
+    // If source is a function, call it with the event name to get the actual trigger
+    const actualSource = typeof source === 'function' 
+      ? (source as (eventName: Evt) => TriggerSource<NewSP>)(this.eventName)
+      : source;
+    
     // Run onSourceAttached hook
     if (this.auk.runHook) {
       this.auk.runHook('onSourceAttached', {
         eventName: this.eventName,
-        source,
+        source: actualSource,
       }).catch(error => {
         console.error('[ProducerBuilder] onSourceAttached hook failed:', error);
       });
@@ -64,7 +71,7 @@ export class ProducerBuilder<
     return new ProducerBuilder<Events, Evt, NewSP, Context>(
       this.auk,
       this.eventName,
-      source,
+      actualSource,
       this.retryOpts
     );
   }
