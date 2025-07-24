@@ -18,12 +18,14 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@azure/arm-servicebus": "^6.1.0",
+    "@azure/identity": "^4.10.2",
     "@azure/service-bus": "^7.9.5",
     "@sentry/bun": "^9.40.0",
     "amqplib": "^0.10.3",
+    "core": "file:../core",
     "kafkajs": "^2.2.4",
-    "nats": "^2.29.3",
-    "core": "file:../core"
+    "nats": "^2.29.3"
   },
   "devDependencies": {
     "@types/amqplib": "^0.10.4",
