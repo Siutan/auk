@@ -2,8 +2,8 @@
   "name": "auk-monorepo",
   "private": true,
   "workspaces": [
-    "packages/core",
-    "packages/addons"
+    "core",
+    "addons"
   ],
   "scripts": {
     "build": "bun run build:core && bun run build:addons",
