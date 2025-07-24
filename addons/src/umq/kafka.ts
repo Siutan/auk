@@ -1,5 +1,7 @@
 /** biome-ignore-all lint/suspicious/noExplicitAny: <Data could be anything> */
 
+// TODO: I'm like 90% sure this implementation is wrong
+
 import { type TSchema, Value } from "core";
 import { type Consumer, Kafka, type Producer } from "kafkajs";
 import type { UmqProvider } from "./index.js";

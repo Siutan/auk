@@ -1,79 +1,26 @@
 # Auk Addons
 
-Addons for the Auk event system.
+Auk Addons is a collection of integrations and utilities that extend the core Auk event bus and background job framework. This package provides out-of-the-box support for popular message brokers, advanced triggers, and middleware to help you build robust, distributed event-driven systems.
 
-## Available Addons
+## What does it include?
 
-### Distributed Addons
+- **Distributed Broker Integrations:**
+  - **NATS JetStream**: Distributed messaging with dead letter queue (DLQ) support and lifecycle hooks.
+  - **Azure Service Bus**: Managed pub/sub and queue support for Azure cloud environments, including resource management utilities.
+  - **RabbitMQ**: Topic-based messaging for scalable event delivery.
+  - **Kafka**: (Planned) Integration for high-throughput distributed messaging.
 
-- **NATS** (`./nats`) - NATS broker implementation for distributed event handling using NATS as a message broker
+- **Triggers:**
+  - **UMQ Trigger**: Unified interface for using Azure Service Bus, RabbitMQ, and (soon) Kafka as event triggers in Auk producers.
+  - **Webhook Trigger**: Easily trigger events from incoming webhooks.
+
+- **Middleware:**
+  - **Sentry Middleware**: Capture and report errors in your Auk event pipeline to Sentry for monitoring and alerting.
+
+## Why Auk Addons?
+
+Auk Addons was created to make it easy to connect Auk to real-world infrastructure and cloud services, enabling production-ready event-driven architectures with minimal setup. It abstracts the complexity of broker configuration, resource management, and error handling, so you can focus on your application's logic.
 
 ## Usage
 
-```typescript
-// Import everything
-import { NATS, NATSOptions } from "auk-addons";
-
-// Import only NATS
-import { NATS, NATSOptions } from "auk-addons/nats";
-```
-
-### Building
-
-```bash
-# Build all addons
-bun run build
-
-# Development mode with watch
-bun run dev
-
-# Clean build artifacts
-bun run clean
-```
-
-## Development
-
-When adding new addons:
-
-1. Create your addon in the appropriate directory (e.g., `distributed/your-addon/`)
-2. Export it from the main `index.ts` file
-3. Add it to the `exports` field in `package.json`
-4. Add a build script for the specific addon
-
-### Example: Adding a Redis Addon
-
-```typescript
-// distributed/redis/index.ts
-export class Redis implements Broker {
-  // Implementation
-}
-
-// index.ts
-export * from "./distributed/redis/index.js";
-
-// build.ts - Add to the buildAddons function
-const redis = await build({
-  entrypoints: ["./distributed/redis/index.ts"],
-  outdir: "./dist",
-  target: "bun",
-  format: "esm",
-  minify: true,
-  naming: "redis.js",
-});
-buildOutputs.push(redis);
-
-// package.json exports
-"./redis": {
-  "import": "./dist/redis.js",
-  "types": "./dist/redis.d.ts"
-}
-```
-
-## Build Output
-
-The build process creates:
-
-- `dist/index.js` - Main bundle with all addons
-- `dist/nats.js` - NATS-only bundle
-- `dist/*.d.ts` - TypeScript declarations
-- `dist/*.js.map` - Source maps
+Import the integrations you need from `@aukjs/addons` and plug them into your Auk setup. For detailed usage and configuration, see the source files in the `src/` directory and the [Azure Service Bus guide](./docs/azure-service-bus.md).

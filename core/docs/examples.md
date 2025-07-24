@@ -560,7 +560,7 @@ describe("Distributed Job Processing", () => {
 
 ---
 
-## Performance Optimization
+## Performance Optimisation
 
 ### Batch Processing
 
@@ -633,4 +633,4 @@ auk.consumer("batch.process", async (event, ctx) => {
 await auk.start();
 ```
 
-These examples demonstrate the flexibility and power of Auk for building robust, scalable event-driven applications. Each pattern can be combined and customized to fit your specific use case.
+These examples demonstrate the flexibility and power of Auk for building robust, scalable event-driven applications. Each pattern can be combined and customised to fit your specific use case.

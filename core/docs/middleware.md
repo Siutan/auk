@@ -8,7 +8,7 @@ Auk provides a comprehensive middleware system for monitoring, logging, metrics 
 
 The middleware system provides hooks at every stage of the event-driven lifecycle:
 
-- **Auk Lifecycle**: Instance initialization and startup
+- **Auk Lifecycle**: Instance initialisation and startup
 - **Producer Lifecycle**: Registration, trigger attachment, and event production
 - **Consumer Lifecycle**: Event dispatch and consumption
 - **Error Handling**: Production and consumption failures
@@ -61,7 +61,7 @@ class MetricsMiddleware implements AukMiddleware<typeof Events> {
   };
 
   async onAukStart({ auk }) {
-    console.log("Metrics middleware initialized");
+    console.log("Metrics middleware initialised");
     
     // Start metrics reporting
     auk.ctx().setInterval(() => {
@@ -107,7 +107,7 @@ The `AukMiddleware` interface provides hooks for every stage of the lifecycle:
 
 ### Auk Lifecycle
 
-- `onAukInit({ auk })`: Called when Auk instance is initialized
+- `onAukInit({ auk })`: Called when Auk instance is initialised
 - `onAukStart({ auk })`: Called when Auk instance starts up
 - `onAukShutdown({ auk })`: Called when Auk instance is shutting down
 

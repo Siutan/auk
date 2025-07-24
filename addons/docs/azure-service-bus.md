@@ -28,8 +28,8 @@ const azureServiceBusTopicConfig = {
   provider: "azure" as const,
   config: {
     connectionString: "your-connection-string",
-    // Set to topic mode for pub/sub messaging (default if not specified)
-    mode: "topic" as const,
+    // Set to topic mode for pub/sub messaging or queue mode for point-to-point messaging (default is topic)
+    mode: "queue" as const,
     topicName: "auk_events", // Default: "auk_events"
     subscriptionName: "auk_events-subs", // Default: "${topicName}-subs"
     // Auto-creation of topics and subscriptions
