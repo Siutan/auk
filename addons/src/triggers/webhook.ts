@@ -1,10 +1,5 @@
-import {
-  type Auk,
-  type Static,
-  type TSchema,
-  Value,
-} from "../../core/src/index";
-import type { TriggerSource } from "../../core/src/index.js";
+import type { TriggerSource } from "core";
+import { type Auk, type Static, type TSchema, Value } from "core";
 
 export interface WebhookTriggerOptions {
   hostname?: string;

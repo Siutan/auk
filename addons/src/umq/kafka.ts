@@ -1,7 +1,7 @@
 /** biome-ignore-all lint/suspicious/noExplicitAny: <Data could be anything> */
 
+import { type TSchema, Value } from "core";
 import { type Consumer, Kafka, type Producer } from "kafkajs";
-import { type TSchema, Value } from "../../core/src";
 import type { UmqProvider } from "./index.js";
 
 export interface KafkaConfig {

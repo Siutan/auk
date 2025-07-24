@@ -5,8 +5,8 @@ import {
   type Static,
   type TSchema,
   Value,
-} from "../../core/src/index.js";
-import type { TriggerSource } from "../../core/src/triggers.js";
+} from "core";
+import type { TriggerSource } from "core";
 import type { AzureServiceBusConfig } from "../umq/azure.js";
 import { AzureServiceBusProvider } from "../umq/azure.js";
 import type { UmqProvider } from "../umq/index.js";

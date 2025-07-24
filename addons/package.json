@@ -6,42 +6,29 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    },
-    "./nats": {
-      "import": "./dist/nats.js",
-      "types": "./dist/nats.d.ts"
-    },
-    "./sentry": {
-      "import": "./dist/sentry.js",
-      "types": "./dist/sentry.d.ts"
-    },
-    "./triggers": {
-      "import": "./dist/triggers.js",
-      "types": "./dist/triggers.d.ts"
-    },
-    "./umq": {
-      "import": "./dist/umq.js",
-      "types": "./dist/umq.d.ts"
     }
   },
   "scripts": {
-    "build": "bun run build.ts",
-    "build:all": "bun run build.ts",
+    "build": "tsup src/index.ts --dts --format esm,cjs --minify terser",
     "dev": "bun run build.ts --watch",
     "clean": "rm -rf dist",
-    "postbuild": "bun run scripts/copy-dts.js",
-    "prepublishOnly": "bun run build.ts && npx tsc --emitDeclarationOnly && bun run scripts/copy-dts.js"
+    "prepublishOnly": "tsup src/index.ts --dts --format esm,cjs --minify terser"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
     "@azure/service-bus": "^7.9.5",
+    "@sentry/bun": "^9.40.0",
     "amqplib": "^0.10.3",
-    "kafkajs": "^2.2.4"
+    "kafkajs": "^2.2.4",
+    "nats": "^2.29.3",
+    "core": "file:../core"
   },
   "devDependencies": {
     "@types/amqplib": "^0.10.4",
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "terser": "^5.43.1",
+    "tsup": "^8.5.0"
   }
 }

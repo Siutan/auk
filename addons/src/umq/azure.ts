@@ -4,7 +4,7 @@ import {
   type ServiceBusReceiver,
   type ServiceBusSender,
 } from "@azure/service-bus";
-import { type TSchema, Value } from "../../core/src";
+import { type TSchema, Value } from "core";
 import type { UmqProvider } from "../umq/index.js";
 
 export interface AzureServiceBusConfig {
@@ -54,7 +54,10 @@ export class AzureServiceBusProvider implements UmqProvider {
     await this.sender.sendMessages(message);
   }
 
-  async subscribe(event: string | string[], handler: (data: any) => void): Promise<void> {
+  async subscribe(
+    event: string | string[],
+    handler: (data: any) => void
+  ): Promise<void> {
     this.initClient();
     if (!this.client) throw new Error("ServiceBus client not available");
 
@@ -79,7 +82,9 @@ export class AzureServiceBusProvider implements UmqProvider {
           }
 
           // If it's wrapped as { event, payload }
-          const data = payload.event ? payload : { event: msg.subject, payload };
+          const data = payload.event
+            ? payload
+            : { event: msg.subject, payload };
 
           const schema = this.schemas[data.event];
           if (schema && !Value.Check(schema, data.payload)) {

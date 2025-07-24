@@ -19,7 +19,7 @@ import type {
   Broker,
   Delivery,
   DLQMessageMetadata,
-} from "../../../core/src/index.js";
+} from "core";
 
 /**
  * DLQ configuration for JetStream.
@@ -686,4 +686,4 @@ export class NatsBroker implements Broker {
 }
 
 // Re-export types for convenience
-export type { Delivery } from "../../../core/src/index.js";
+export type { Delivery } from "core";

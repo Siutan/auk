@@ -8,8 +8,8 @@
  * This middleware captures errors in the Auk event pipeline and reports them to Sentry.
  */
 
+import type { AdvancedMiddlewareFn, AukEvent } from "core";
 import * as Sentry from "@sentry/bun";
-import type { AdvancedMiddlewareFn, AukEvent } from "../../../core/src/index.js";
 
 let sentryInitialized = false;
 

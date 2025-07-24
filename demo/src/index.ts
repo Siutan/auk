@@ -1,5 +1,5 @@
-import { umqTrigger } from "../../addons/triggers";
-import { Auk, T } from "../../core/dist";
+import { umqTrigger } from "../../addons/dist/index.js";
+import { Auk, T } from "../../core/dist/index.js";
 
 // 1. Define the MQ event schema
 const OrderProcessedSchema = T.Object({
@@ -32,15 +32,23 @@ const auk = new Auk(Events, {
 });
 
 // 3. Register producer with MQ trigger
-const umqConfig = {
+const rabbitMqConfig = {
   provider: "rabbitmq" as const,
   config: {
     url: "amqp://localhost:5672",
   },
 };
+
+const azureServiceBusConfig = {
+  provider: "azure" as const,
+  config: {
+    connectionString: "Endpoint=sb://huddled-mq.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SzrVyWrLD3KBdFy2OC0D6rMh+Znk+UWHx+ASbBM+m+Q=",
+    topicName: "mytopic",
+  },
+};
 auk
   .producer("order.processed")
-  .from(umqTrigger(auk, umqConfig))
+  .from(umqTrigger(auk, rabbitMqConfig))
   .handle(async ({ payload, ctx, emit }) => {
     ctx.logger.info("Producing order.processed event", payload);
 
@@ -58,7 +66,7 @@ auk
 
 auk
   .producer("user.updated")
-  .from(umqTrigger(auk, umqConfig))
+  .from(umqTrigger(auk, azureServiceBusConfig))
   .handle(async ({ payload, ctx, emit }) => {
     ctx.logger.info("Producing user.updated event", payload);
 

@@ -1,8 +1,8 @@
 /** biome-ignore-all lint/suspicious/noExplicitAny: <Data could be anything> */
 
+import { type TSchema, Value } from "core";
 import type { ConsumeMessage } from "amqplib";
 import * as amqp from "amqplib";
-import { type TSchema, Value } from "../../core/src";
 import type { UmqProvider } from "./index.js";
 
 export interface RabbitMQConfig {
@@ -46,7 +46,10 @@ export class RabbitMQProvider implements UmqProvider {
     this.channel.publish(exchange, event, Buffer.from(message));
   }
 
-  async subscribe(event: string | string[], handler: (data: any) => void): Promise<void> {
+  async subscribe(
+    event: string | string[],
+    handler: (data: any) => void
+  ): Promise<void> {
     await this.connect();
     if (!this.channel) throw new Error("RabbitMQ channel not available");
     const events = Array.isArray(event) ? event : [event];
