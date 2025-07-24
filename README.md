@@ -4,8 +4,8 @@ A monorepo containing the Auk core library and addons.
 
 ## Packages
 
-- [@auk/core](./core) - The core Auk library
-- [@auk/addons](./addons) - Additional functionality for Auk
+- [@aukjs/core](./core) - The core Auk library
+- [@aukjs/addons](./addons) - Additional functionality for Auk
 
 You can find relevant documentation for each package in its respective README.
 
@@ -72,15 +72,15 @@ The project includes GitHub Actions workflows for:
 
 The packages are published to npm as:
 
-- [@auk/core](https://www.npmjs.com/package/@auk/core)
-- [@auk/addons](https://www.npmjs.com/package/@auk/addons)
+- [@aukjs/core](https://www.npmjs.com/package/@aukjs/core)
+- [@aukjs/addons](https://www.npmjs.com/package/@aukjs/addons)
 
 ## Installation
 
 ```bash
 # Install core package
-bun add @auk/core
+bun add @aukjs/core
 
 # Install addons package
-bun add @auk/addons
+bun add @aukjs/addons
 ```

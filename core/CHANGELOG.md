@@ -1,4 +1,4 @@
-# @auk/core
+# @aukjs/core
 
 ## 0.1.0
 

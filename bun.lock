@@ -10,10 +10,10 @@
       },
     },
     "addons": {
-      "name": "@auk/addons",
+      "name": "@aukjs/addons",
       "version": "0.1.0",
       "dependencies": {
-        "@auk/core": "^0.0.1",
+        "@aukjs/core": "^0.0.1",
         "@azure/arm-servicebus": "^6.1.0",
         "@azure/identity": "^4.10.2",
         "@azure/service-bus": "^7.9.5",
@@ -33,7 +33,7 @@
       },
     },
     "core": {
-      "name": "@auk/core",
+      "name": "@aukjs/core",
       "version": "0.1.0",
       "dependencies": {
         "@sinclair/typebox": "^0.34.38",
@@ -53,9 +53,9 @@
     },
   },
   "packages": {
-    "@auk/addons": ["@auk/addons@workspace:addons"],
+    "@aukjs/addons": ["@aukjs/addons@workspace:addons"],
 
-    "@auk/core": ["@auk/core@workspace:core"],
+    "@aukjs/core": ["@aukjs/core@workspace:core"],
 
     "@azure/abort-controller": ["@azure/abort-controller@1.1.0", "", { "dependencies": { "tslib": "^2.2.0" } }, "sha512-TrRLIoSQVzfAJX9H1JeFjzAoDGcoK1IYX1UImfceTZpsyYfWr09Ss1aHW1y5TrrR3iq6RZLBwJ3E24uwPhwahw=="],
 
