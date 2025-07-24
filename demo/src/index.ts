@@ -42,7 +42,7 @@ const rabbitMqConfig = {
 const azureServiceBusConfig = {
   provider: "azure" as const,
   config: {
-    connectionString: "Endpoint=sb://huddled-mq.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SzrVyWrLD3KBdFy2OC0D6rMh+Znk+UWHx+ASbBM+m+Q=",
+    connectionString: "do-not-expose-hehehe",
     topicName: "mytopic",
   },
 };
