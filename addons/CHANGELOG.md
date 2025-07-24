@@ -1,5 +1,13 @@
 # @aukjs/addons
 
+## 0.1.1
+
+### Patch Changes
+
+- 76e0b3d: Updated readmes and docs for core and addon packages.
+- Updated dependencies [76e0b3d]
+  - @aukjs/core@0.1.1
+
 ## 0.1.0
 
 ### Minor Changes
