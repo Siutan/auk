@@ -1,0 +1,21 @@
+{
+  "name": "auk-monorepo",
+  "private": true,
+  "workspaces": [
+    "core",
+    "addons"
+  ],
+  "scripts": {
+    "build": "bun run build:core && bun run build:addons",
+    "build:core": "cd core && bun run build",
+    "build:addons": "cd addons && bun run build",
+    "test": "bun test",
+    "version": "changeset version",
+    "release": "bun run build && changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.27.1",
+    "@biomejs/biome": "2.1.2",
+    "@types/bun": "^1.2.18"
+  }
+}

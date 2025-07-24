@@ -1,5 +1,5 @@
 {
-  "name": "auk",
+  "name": "@auk/core",
   "version": "0.0.1",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -13,7 +13,9 @@
   },
   "scripts": {
     "build": "tsup src/index.ts --dts --format esm,cjs --minify terser",
-    "size": "bun run scripts/check-size.ts"
+    "size": "bun run scripts/check-size.ts",
+    "dev": "tsup src/index.ts --dts --format esm,cjs --watch",
+    "clean": "rm -rf dist"
   },
   "devDependencies": {
     "@biomejs/biome": "2.1.2",
@@ -27,6 +29,9 @@
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.38"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "type": "module"
 }

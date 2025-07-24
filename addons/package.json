@@ -1,5 +1,6 @@
 {
-  "name": "auk-addons",
+  "name": "@auk/addons",
+  "version": "0.0.1",
   "module": "dist/index.js",
   "type": "module",
   "exports": {
@@ -23,9 +24,12 @@
     "@azure/service-bus": "^7.9.5",
     "@sentry/bun": "^9.40.0",
     "amqplib": "^0.10.3",
-    "core": "file:../core",
+    "@auk/core": "^0.0.1",
     "kafkajs": "^2.2.4",
     "nats": "^2.29.3"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
     "@types/amqplib": "^0.10.4",
