@@ -1,6 +1,7 @@
 /** biome-ignore-all lint/suspicious/noExplicitAny:<Data could be anything, i should change ln 34 though> */
-import type { TSchema } from "core";
+import type { TSchema } from "@aukjs/core";
 import type { AzureServiceBusConfig } from "./azure.js";
+import type { KafkaConfig } from "kafkajs";
 import type { RabbitMQConfig } from "./rabbitmq";
 
 export interface UmqProvider {
@@ -22,10 +23,10 @@ export type UmqConfigOptions = {
 } & (
   | { provider: "rabbitmq"; config: RabbitMQConfig }
   | { provider: "azure"; config: AzureServiceBusConfig }
-  | { provider: "kafka"; config: any }
+  | { provider: "kafka"; config: KafkaConfig }
 );
 
-declare module "core" {
+declare module "@aukjs/core" {
   interface Auk {
     umq: {
       emit(event: string, data: any): Promise<void>;

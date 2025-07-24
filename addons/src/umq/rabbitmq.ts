@@ -1,6 +1,6 @@
 /** biome-ignore-all lint/suspicious/noExplicitAny: <Data could be anything> */
 
-import { type TSchema, Value } from "core";
+import { type TSchema, Value } from "@aukjs/core";
 import type { ConsumeMessage } from "amqplib";
 import * as amqp from "amqplib";
 import type { UmqProvider } from "./index.js";

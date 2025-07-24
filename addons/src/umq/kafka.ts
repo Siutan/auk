@@ -2,7 +2,7 @@
 
 // TODO: I'm like 90% sure this implementation is wrong
 
-import { type TSchema, Value } from "core";
+import { type TSchema, Value } from "@aukjs/core";
 import { type Consumer, Kafka, type Producer } from "kafkajs";
 import type { UmqProvider } from "./index.js";
 

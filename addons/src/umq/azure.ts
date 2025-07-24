@@ -4,7 +4,7 @@ import {
   type ServiceBusReceiver,
   type ServiceBusSender,
 } from "@azure/service-bus";
-import { type TSchema, Value } from "core";
+import { type TSchema, Value } from "@aukjs/core";
 import type { UmqProvider } from "../umq/index.js";
 import { AzureServiceBusManager } from "./azure-management.js";
 
