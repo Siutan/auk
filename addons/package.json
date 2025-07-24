@@ -1,6 +1,6 @@
 {
   "name": "@auk/addons",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "module": "dist/index.js",
   "type": "module",
   "exports": {
@@ -24,7 +24,7 @@
     "@azure/service-bus": "^7.9.5",
     "@sentry/bun": "^9.40.0",
     "amqplib": "^0.10.3",
-    "@auk/core": "^0.0.1",
+    "@auk/core": "^0.1.0",
     "kafkajs": "^2.2.4",
     "nats": "^2.29.3"
   },
