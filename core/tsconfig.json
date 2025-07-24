@@ -11,10 +11,6 @@
 
     // Bundler mode
     "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "noEmit": true,
-    "composite": true,
 
     // Best practices
     "strict": true,
@@ -28,6 +24,6 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "include": ["src", "tests"],
-  "exclude": ["dist", "node_modules", "core/examples"]
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules", "examples"]
 }
