@@ -10,6 +10,18 @@
     "./nats": {
       "import": "./dist/nats.js",
       "types": "./dist/nats.d.ts"
+    },
+    "./sentry": {
+      "import": "./dist/sentry.js",
+      "types": "./dist/sentry.d.ts"
+    },
+    "./triggers": {
+      "import": "./dist/triggers.js",
+      "types": "./dist/triggers.d.ts"
+    },
+    "./umq": {
+      "import": "./dist/umq.js",
+      "types": "./dist/umq.d.ts"
     }
   },
   "scripts": {
@@ -17,7 +29,8 @@
     "build:all": "bun run build.ts",
     "dev": "bun run build.ts --watch",
     "clean": "rm -rf dist",
-    "prepublishOnly": "bun run build.ts"
+    "postbuild": "bun run scripts/copy-dts.js",
+    "prepublishOnly": "bun run build.ts && npx tsc --emitDeclarationOnly && bun run scripts/copy-dts.js"
   },
   "peerDependencies": {
     "typescript": "^5"

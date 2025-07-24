@@ -3,6 +3,7 @@
 
 // Distributed addons
 export * from "./distributed/nats/index.js";
+export * from "./triggers/index.js";
+export type { UmqConfigOptions } from "./umq/index.js";
 
-// Producers
-export * from "./plugins/webhook/index.js";
+// UMQ module augmentation is available through Auk interface

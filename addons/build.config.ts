@@ -4,6 +4,8 @@ export const buildConfig = {
   entryPoints: {
     index: "./index.ts",
     nats: "./distributed/nats/index.ts",
+    sentry: "./middleware/sentry/index.ts",
+    triggers: "./triggers/index.ts",
   },
   outdir: "./dist",
   target: "bun",

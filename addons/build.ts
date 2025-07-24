@@ -45,6 +45,9 @@ async function buildAddons() {
     target: "bun",
     format: "esm",
     minify: true,
+    splitting: true,
+    sourcemap: "external",
+    define: { "process.env.NODE_ENV": "\"production\"" },
   });
   buildOutputs.push(index);
 
@@ -56,6 +59,9 @@ async function buildAddons() {
     format: "esm",
     minify: true,
     naming: "nats.js",
+    splitting: true,
+    sourcemap: "external",
+    define: { "process.env.NODE_ENV": "\"production\"" },
   });
   buildOutputs.push(nats);
 
@@ -67,8 +73,39 @@ async function buildAddons() {
     format: "esm",
     minify: true,
     naming: "sentry.js",
+    splitting: true,
+    sourcemap: "external",
+    define: { "process.env.NODE_ENV": "\"production\"" },
   });
   buildOutputs.push(sentry);
+
+  // Build triggers addon
+  const triggers = await build({
+    entrypoints: ["./triggers/index.ts"],
+    outdir: "./dist",
+    target: "bun",
+    format: "esm",
+    minify: true,
+    naming: "triggers.js",
+    splitting: true,
+    sourcemap: "external",
+    define: { "process.env.NODE_ENV": "\"production\"" },
+  });
+  buildOutputs.push(triggers);
+
+  // Build UMQ addon
+  const umq = await build({
+    entrypoints: ["./umq/index.ts"],
+    outdir: "./dist",
+    target: "bun",
+    format: "esm",
+    minify: true,
+    naming: "umq.js",
+    splitting: true,
+    sourcemap: "external",
+    define: { "process.env.NODE_ENV": "\"production\"" },
+  });
+  buildOutputs.push(umq);
 
   printResults(buildOutputs);
 }

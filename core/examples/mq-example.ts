@@ -1,5 +1,5 @@
-import { umqTrigger } from "../../addons/triggers";
-import { Auk, T } from "../../core/dist";
+import { umqTrigger } from "../../addons/triggers/umq.js";
+import { Auk, T } from "../src/index";
 
 // 1. Define the MQ event schema
 const OrderProcessedSchema = T.Object({
@@ -42,6 +42,7 @@ auk
   .producer("order.processed")
   .from(umqTrigger(auk, umqConfig))
   .handle(async ({ payload, ctx, emit }) => {
+    // payload is now properly typed as { orderId: string, amount: number }
     ctx.logger.info("Producing order.processed event", payload);
 
     emit("order.processed", payload);
