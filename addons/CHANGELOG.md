@@ -1,5 +1,16 @@
 # @aukjs/addons
 
+## 0.3.0
+
+### Minor Changes
+
+- 5c912cd: I fixed the packaging issue... my bad
+
+### Patch Changes
+
+- Updated dependencies [5c912cd]
+  - @aukjs/core@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes
