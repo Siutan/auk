@@ -1,5 +1,11 @@
 # @aukjs/core
 
+## 0.3.0
+
+### Minor Changes
+
+- 5c912cd: I fixed the packaging issue... my bad
+
 ## 0.2.0
 
 ### Minor Changes
