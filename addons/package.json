@@ -9,6 +9,11 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": [
+    "dist",
+    "CHANGELOG.md",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsup src/index.ts --dts --format esm,cjs --minify terser",
     "dev": "bun run build.ts --watch",
