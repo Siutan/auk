@@ -1,5 +1,16 @@
 # @aukjs/addons
 
+## 0.2.0
+
+### Minor Changes
+
+- 774ddc3: why did the entire repo get published to npm?
+
+### Patch Changes
+
+- Updated dependencies [774ddc3]
+  - @aukjs/core@0.2.0
+
 ## 0.1.2
 
 ### Patch Changes

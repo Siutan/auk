@@ -1,5 +1,11 @@
 # @aukjs/core
 
+## 0.2.0
+
+### Minor Changes
+
+- 774ddc3: why did the entire repo get published to npm?
+
 ## 0.1.1
 
 ### Patch Changes
