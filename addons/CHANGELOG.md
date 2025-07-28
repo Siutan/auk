@@ -1,5 +1,16 @@
 # @aukjs/addons
 
+## 0.4.0
+
+### Minor Changes
+
+- 2516ae9: Added manual/semi-automatic ack for message queues
+
+### Patch Changes
+
+- Updated dependencies [2516ae9]
+  - @aukjs/core@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
