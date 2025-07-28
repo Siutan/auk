@@ -351,7 +351,12 @@ export class Auk<
           error: error as Error,
           ctx,
         });
-        throw error;
+        
+        // Log the error but don't re-throw to prevent app crash
+        ctx.logger.error(
+          `[Auk] Consumer error for event ${String(eventName)}:`,
+          error
+        );
       }
     };
 
@@ -364,9 +369,18 @@ export class Auk<
 
     // Register the consumer with the event bus for local mode
     if (this._mode === "local") {
-      this.eventBus.on(String(eventName), (data) => {
+      this.eventBus.on(String(eventName), async (data) => {
         const contextWithLogger = this.createContextWithLogger(name);
-        wrappedHandler(data, contextWithLogger as Context);
+        try {
+          await wrappedHandler(data, contextWithLogger as Context);
+        } catch (error) {
+          // Additional safety net - this should not happen since wrappedHandler
+          // now catches errors, but keeping it for extra protection
+          this.context.logger.error(
+            `[Auk] Unhandled error in consumer ${name}:`,
+            error
+          );
+        }
       });
     }
 
@@ -773,11 +787,21 @@ export class Auk<
         );
         await this._broker.subscribe(
           consumer.eventName,
-          (data) => {
+          async (data) => {
             const contextWithLogger = this.createContextWithLogger(
               consumer.name
             );
-            consumer.fn(data, contextWithLogger as Context);
+            try {
+              await consumer.fn(data, contextWithLogger as Context);
+            } catch (error) {
+              // Error handling for distributed mode - this should not happen
+              // since consumer.fn (wrappedHandler) now catches errors, but keeping
+              // it for extra protection
+              this.context.logger.error(
+                `[Auk] Unhandled error in distributed consumer ${consumer.name}:`,
+                error
+              );
+            }
           },
           { delivery: consumer.delivery }
         );
