@@ -23,13 +23,8 @@ export type UmqConfigOptions = {
   | { provider: "kafka"; config: KafkaConfig }
 );
 
-declare module "@aukjs/core" {
-  interface Auk {
-    umq: {
-      emit(event: string, data: any): Promise<void>;
-    };
-  }
-}
+// Note: The umq functionality is provided through the umqTrigger function,
+// not as a property on the Auk instance
 
 export * from "./azure.js";
 export * from "./rabbitmq.js";

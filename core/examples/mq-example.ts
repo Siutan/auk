@@ -1,5 +1,5 @@
-import { Auk, T } from "@aukjs/core";
-import { umqTrigger } from "../../addons/src/index.js";
+import { umqTrigger } from "../../addons/dist";
+import { Auk, T } from "../dist";
 
 // 1. Define the MQ event schema
 const OrderProcessedSchema = T.Object({
