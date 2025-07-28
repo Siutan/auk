@@ -1,6 +1,6 @@
 {
   "name": "@aukjs/addons",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -32,7 +32,7 @@
     "@azure/service-bus": "^7.9.5",
     "@sentry/bun": "^9.40.0",
     "amqplib": "^0.10.3",
-    "@aukjs/core": "^0.4.1",
+    "@aukjs/core": "^0.4.2",
     "kafkajs": "^2.2.4",
     "nats": "^2.29.3"
   },

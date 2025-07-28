@@ -1,5 +1,13 @@
 # @aukjs/addons
 
+## 0.4.1
+
+### Patch Changes
+
+- 881122c: removed unessesary type declaration
+- Updated dependencies [881122c]
+  - @aukjs/core@0.4.2
+
 ## 0.4.0
 
 ### Minor Changes
