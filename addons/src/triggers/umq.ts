@@ -1,15 +1,25 @@
 /** biome-ignore-all lint/suspicious/noExplicitAny: <data could be anything> */
 
-import {
-  type Auk,
-  type Static,
-  type TSchema,
-  Value,
-} from "@aukjs/core";
 import type { TriggerSource } from "@aukjs/core";
+import { type Auk, type Static, type TSchema, Value } from "@aukjs/core";
 import type { AzureServiceBusConfig } from "../umq/azure.js";
 import { AzureServiceBusProvider } from "../umq/azure.js";
 import type { UmqProvider } from "../umq/index.js";
+
+export interface UmqMessageContext {
+  ack(): Promise<void>;
+  nack(): Promise<void>;
+  reject(): Promise<void>;
+  deliveryCount: number;
+  messageId?: string;
+  timestamp: Date;
+}
+
+export type UmqMessageHandler = (
+  data: { event: string; payload: unknown },
+  context: UmqMessageContext,
+) => Promise<void>;
+
 import type { RabbitMQConfig } from "../umq/rabbitmq.js";
 import { RabbitMQProvider } from "../umq/rabbitmq.js";
 
@@ -50,14 +60,14 @@ const umqProviderCache = new Map<
  */
 export function umqTrigger<
   EventSchemas extends Record<string, TSchema>,
-  EventName extends keyof EventSchemas
+  EventName extends keyof EventSchemas,
 >(auk: Auk<EventSchemas>, options: UmqConfigOptions) {
   return (
-    eventName: EventName
+    eventName: EventName,
   ): TriggerSource<Static<EventSchemas[EventName]>> => ({
     subscribe(listener) {
-        const cacheKey = JSON.stringify(options);
-        let providerEntry = umqProviderCache.get(cacheKey);
+      const cacheKey = JSON.stringify(options);
+      let providerEntry = umqProviderCache.get(cacheKey);
 
       if (!providerEntry) {
         let provider: UmqProvider;
@@ -89,18 +99,19 @@ export function umqTrigger<
         auk.use({
           onAukStart: () => {
             const eventsToSubscribe = Array.from(
-              providerEntry?.listeners.keys() ?? []
+              providerEntry?.listeners.keys() ?? [],
             );
             if (eventsToSubscribe.length > 0) {
               providerEntry?.provider.subscribe(
                 eventsToSubscribe,
-                (data: { event: string; payload: unknown }) => {
+                async (data: { event: string; payload: unknown }, context: UmqMessageContext) => {
                   const schema = auk.events[data.event];
                   if (!schema) {
                     auk.context.logger.error("Schema not found for event:", {
                       eventName: data.event,
                       availableEvents: Object.keys(auk.events),
                     });
+                    await context.reject(); // Reject unknown events
                     return;
                   }
 
@@ -110,6 +121,7 @@ export function umqTrigger<
                       eventName: data.event,
                       errors,
                     });
+                    await context.reject(); // Reject invalid payloads
                     return;
                   }
 
@@ -117,17 +129,65 @@ export function umqTrigger<
                     EventSchemas[keyof EventSchemas]
                   >;
                   const eventListeners = providerEntry?.listeners.get(
-                    data.event
+                    data.event,
                   );
-                  if (eventListeners) {
-                    for (const l of eventListeners) {
-                      l(typedPayload);
+                  
+                  if (eventListeners && eventListeners.size > 0) {
+                    let allSucceeded = true;
+                    let shouldRetry = false;
+                    
+                    // Process all listeners for this event
+                    for (const listener of eventListeners) {
+                      try {
+                        await listener(typedPayload);
+                      } catch (error) {
+                        allSucceeded = false;
+                        auk.context.logger.error(`Consumer failed for event ${data.event}:`, {
+                          error: error instanceof Error ? error.message : String(error),
+                          deliveryCount: context.deliveryCount,
+                        });
+                        
+                        // Implement retry logic based on delivery count
+                        const maxRetries = 3; // Could be configurable
+                        if (context.deliveryCount < maxRetries) {
+                          shouldRetry = true;
+                        }
+                        
+                        // Call onConsumeError middleware if available
+                        try {
+                          await (auk as any).runHook('onConsumeError', {
+                            eventName: data.event as keyof EventSchemas,
+                            payload: typedPayload,
+                            error: error instanceof Error ? error : new Error(String(error)),
+                            ctx: auk.context,
+                            consumer: listener as any,
+                          });
+                        } catch (middlewareError) {
+                          auk.context.logger.error('Middleware onConsumeError failed:', middlewareError);
+                        }
+                      }
                     }
+                    
+                    // Handle acknowledgment based on processing results
+                    if (allSucceeded) {
+                      await context.ack();
+                      auk.context.logger.debug(`Successfully processed event ${data.event}`);
+                    } else if (shouldRetry) {
+                      await context.nack(); // Requeue for retry
+                      auk.context.logger.warn(`Requeuing event ${data.event} for retry (attempt ${context.deliveryCount})`);
+                    } else {
+                      await context.reject(); // Send to DLQ after max retries
+                      auk.context.logger.error(`Rejecting event ${data.event} after ${context.deliveryCount} attempts`);
+                    }
+                  } else {
+                    // No listeners registered - acknowledge to prevent reprocessing
+                    await context.ack();
+                    auk.context.logger.warn(`No listeners registered for event ${data.event}, acknowledging message`);
                   }
-                }
+                },
               );
             }
-          }
+          },
         });
       }
 
@@ -139,17 +199,14 @@ export function umqTrigger<
 
       auk.context.logger.info(
         `UMQ trigger initialized: ${options.provider} for event: ${String(
-          eventName
-        )}`
+          eventName,
+        )}`,
       );
-
-
 
       return () => {
         providerEntry?.listeners.get(eventNameStr)?.delete(listener);
       };
       // Return an empty cleanup function
-
     },
   });
 }

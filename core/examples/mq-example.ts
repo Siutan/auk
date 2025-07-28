@@ -1,5 +1,5 @@
-import { umqTrigger } from "../../addons/triggers/umq.js";
-import { Auk, T } from "../src/index";
+import { Auk, T } from "@aukjs/core";
+import { umqTrigger } from "../../addons/src/index.js";
 
 // 1. Define the MQ event schema
 const OrderProcessedSchema = T.Object({
@@ -75,11 +75,13 @@ auk
 auk.consumer("order.processed", (order, ctx) => {
   // order is typed as { orderId: number, userId: string, amount: number }
   ctx.logger.info(`Order ${order.orderId} processed for $${order.amount}`);
+
 });
 
 auk.consumer("user.created", (user, ctx) => {
   // user is typed as { id: string, name: string, email: string }
   ctx.logger.info(`User ${user.id} created: ${user.name} (${user.email})`);
+  
 });
 
 // 5. Start the service

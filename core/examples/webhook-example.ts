@@ -1,4 +1,4 @@
-import { fromWebhook } from "../../addons/triggers/webhook.js";
+import { fromWebhook } from "../../addons/src/triggers/webhook.js";
 import { Auk, T } from "../src/index.js";
 
 // 1. Define the webhook event schema

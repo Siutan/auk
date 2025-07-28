@@ -1,10 +1,11 @@
+import { type TSchema, Value } from "@aukjs/core";
 import {
   ServiceBusClient,
   type ServiceBusReceivedMessage,
   type ServiceBusReceiver,
   type ServiceBusSender,
 } from "@azure/service-bus";
-import { type TSchema, Value } from "@aukjs/core";
+import type { UmqMessageContext, UmqMessageHandler } from "../triggers/umq.js";
 import type { UmqProvider } from "../umq/index.js";
 import { AzureServiceBusManager } from "./azure-management.js";
 
@@ -90,7 +91,7 @@ export class AzureServiceBusProvider implements UmqProvider {
 
   async subscribe(
     event: string | string[],
-    handler: (data: any) => void
+    handler: UmqMessageHandler
   ): Promise<void> {
     this.initClient();
     if (!this.client) throw new Error("ServiceBus client not available");
@@ -126,9 +127,10 @@ export class AzureServiceBusProvider implements UmqProvider {
       try {
         // Try to create the receiver - this will fail if topic/subscription doesn't exist
         this.receiver = this.client.createReceiver(topic, subscription, {
-          // autoCompleteMessages: true by default
+          receiveMode: "peekLock" // Manual acknowledgment
         });
       } catch (error) {
+        console.error("Error creating Azure Service Bus receiver:", error);
         // Print a more helpful error message
         console.error("===== AZURE SERVICE BUS CONFIGURATION ERROR =====");
         console.error(
@@ -167,6 +169,8 @@ export class AzureServiceBusProvider implements UmqProvider {
                 typeof msg.body === "string" ? JSON.parse(msg.body) : msg.body;
             } catch (e) {
               console.error("Failed to parse message body", e);
+              // Abandon message on parse error
+              await this.receiver?.abandonMessage(msg);
               return;
             }
 
@@ -181,10 +185,33 @@ export class AzureServiceBusProvider implements UmqProvider {
                 `Invalid event payload for ${data.event}:`,
                 Value.Errors(schema, data.payload).First()
               );
+              // Dead letter invalid messages
+              await this.receiver?.deadLetterMessage(msg);
               return;
             }
 
-            handler(data);
+            // Create acknowledgment context
+            const context: UmqMessageContext = {
+              deliveryCount: msg.deliveryCount || 1,
+              messageId: typeof msg.messageId === 'string' ? msg.messageId : undefined,
+              timestamp: msg.enqueuedTimeUtc || new Date(),
+              ack: async () => {
+                await this.receiver?.completeMessage(msg);
+              },
+              nack: async () => {
+                await this.receiver?.abandonMessage(msg); // requeue
+              },
+              reject: async () => {
+                await this.receiver?.deadLetterMessage(msg); // send to DLQ
+              },
+            };
+
+            try {
+              await handler(data, context);
+            } catch (error) {
+              console.error(`Error processing message for event ${data.event}:`, error);
+              // Don't auto-complete on error - let the handler decide via context
+            }
           }
         },
         processError: async (err) => {
@@ -219,7 +246,7 @@ export class AzureServiceBusProvider implements UmqProvider {
       try {
         // Try to create the receiver - this will fail if queue doesn't exist
         this.receiver = this.client.createReceiver(queue, {
-          // autoCompleteMessages: true by default
+          receiveMode: "peekLock" // Manual acknowledgment
         });
       } catch (error) {
         // Print a more helpful error message
@@ -253,6 +280,8 @@ export class AzureServiceBusProvider implements UmqProvider {
                 typeof msg.body === "string" ? JSON.parse(msg.body) : msg.body;
             } catch (e) {
               console.error("Failed to parse message body", e);
+              // Abandon message on parse error
+              await this.receiver?.abandonMessage(msg);
               return;
             }
 
@@ -267,10 +296,33 @@ export class AzureServiceBusProvider implements UmqProvider {
                 `Invalid event payload for ${data.event}:`,
                 Value.Errors(schema, data.payload)
               );
+              // Dead letter invalid messages
+              await this.receiver?.deadLetterMessage(msg);
               return;
             }
 
-            handler(data);
+            // Create acknowledgment context
+            const context: UmqMessageContext = {
+              deliveryCount: msg.deliveryCount || 1,
+              messageId: typeof msg.messageId === 'string' ? msg.messageId : undefined,
+              timestamp: msg.enqueuedTimeUtc || new Date(),
+              ack: async () => {
+                await this.receiver?.completeMessage(msg);
+              },
+              nack: async () => {
+                await this.receiver?.abandonMessage(msg); // requeue
+              },
+              reject: async () => {
+                await this.receiver?.deadLetterMessage(msg); // send to DLQ
+              },
+            };
+
+            try {
+              await handler(data, context);
+            } catch (error) {
+              console.error(`Error processing message for event ${data.event}:`, error);
+              // Don't auto-complete on error - let the handler decide via context
+            }
           }
         },
         processError: async (err) => {

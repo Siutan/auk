@@ -1,4 +1,4 @@
-import { NatsBroker } from "../../addons/distributed/nats/index.js";
+import { NatsBroker } from "../../addons/src/distributed/nats/index.js";
 import { Auk, T } from "../src/index.js";
 import { cron } from "../src/triggers/cron.js";
 

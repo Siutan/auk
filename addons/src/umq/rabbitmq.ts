@@ -4,6 +4,7 @@ import { type TSchema, Value } from "@aukjs/core";
 import type { ConsumeMessage } from "amqplib";
 import * as amqp from "amqplib";
 import type { UmqProvider } from "./index.js";
+import type { UmqMessageHandler, UmqMessageContext } from "../triggers/umq.js";
 
 export interface RabbitMQConfig {
   url: string;
@@ -48,7 +49,7 @@ export class RabbitMQProvider implements UmqProvider {
 
   async subscribe(
     event: string | string[],
-    handler: (data: any) => void
+    handler: UmqMessageHandler
   ): Promise<void> {
     await this.connect();
     if (!this.channel) throw new Error("RabbitMQ channel not available");
@@ -63,7 +64,7 @@ export class RabbitMQProvider implements UmqProvider {
     }
     this.channel.consume(
       q.queue,
-      (msg: ConsumeMessage | null) => {
+      async (msg: ConsumeMessage | null) => {
         if (msg?.content) {
           let data: any;
           try {
@@ -85,13 +86,37 @@ export class RabbitMQProvider implements UmqProvider {
                 `Invalid event payload for ${data.event}:`,
                 Value.Errors(schema, data.payload)
               );
+              // Reject invalid messages
+              this.channel?.nack(msg, false, false); // don't requeue
               return;
             }
-            handler(data);
+
+            // Create acknowledgment context
+            const context: UmqMessageContext = {
+              deliveryCount: msg.fields.deliveryTag,
+              messageId: msg.properties.messageId,
+              timestamp: msg.properties.timestamp || Date.now(),
+              ack: async () => {
+                this.channel?.ack(msg);
+              },
+              nack: async () => {
+                this.channel?.nack(msg, false, true); // requeue
+              },
+              reject: async () => {
+                this.channel?.nack(msg, false, false); // don't requeue
+              },
+            };
+
+            try {
+              await handler(data, context);
+            } catch (error) {
+              console.error(`Error processing message for event ${data.event}:`, error);
+              // Don't auto-ack on error - let the handler decide via context
+            }
           }
         }
       },
-      { noAck: true }
+      { noAck: false } // Manual acknowledgment
     );
   }
 

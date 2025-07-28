@@ -4,15 +4,12 @@ import type { AzureServiceBusConfig } from "./azure.js";
 import type { KafkaConfig } from "kafkajs";
 import type { RabbitMQConfig } from "./rabbitmq";
 
+// UmqMessageContext and UmqMessageHandler are now exported from triggers/umq.ts
+import type { UmqMessageHandler } from "../triggers/umq.js";
+
 export interface UmqProvider {
-  publish(
-    event: string,
-    data: { event: string; payload: unknown }
-  ): Promise<void>;
-  subscribe(
-    event: string | string[],
-    handler: (data: { event: string; payload: unknown }) => void
-  ): Promise<void>;
+  publish(event: string, payload: unknown): Promise<void>;
+  subscribe(events: string[], handler: UmqMessageHandler): Promise<void>;
   close(): Promise<void>;
   setSchemas(schemas: Record<string, TSchema>): void;
 }
