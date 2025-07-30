@@ -1,5 +1,13 @@
 # @aukjs/addons
 
+## 0.4.2
+
+### Patch Changes
+
+- 96c950a: Added git link to the package files
+- Updated dependencies [96c950a]
+  - @aukjs/core@0.4.3
+
 ## 0.4.1
 
 ### Patch Changes

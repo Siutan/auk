@@ -1,6 +1,6 @@
 {
   "name": "@aukjs/addons",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "repository": {
     "type": "git",
     "url": "https://github.com/siutan/auk.git"
@@ -36,7 +36,7 @@
     "@azure/service-bus": "^7.9.5",
     "@sentry/bun": "^9.40.0",
     "amqplib": "^0.10.3",
-    "@aukjs/core": "^0.4.2",
+    "@aukjs/core": "^0.4.3",
     "kafkajs": "^2.2.4",
     "nats": "^2.29.3"
   },
