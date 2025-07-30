@@ -1,6 +1,10 @@
 {
   "name": "@aukjs/core",
   "version": "0.4.2",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/siutan/auk.git"
+  },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
