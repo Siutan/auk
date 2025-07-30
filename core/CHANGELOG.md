@@ -1,5 +1,11 @@
 # @aukjs/core
 
+## 0.4.3
+
+### Patch Changes
+
+- 96c950a: Added git link to the package files
+
 ## 0.4.2
 
 ### Patch Changes
